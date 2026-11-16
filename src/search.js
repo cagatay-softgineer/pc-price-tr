@@ -1,7 +1,7 @@
 // Fan a query out to every store, normalise and filter what comes back.
 import { SITES } from './sites.js';
 import { scrape } from './browser.js';
-import { classify, cleanTitle, cleanUrl, flagOutliers, matches, parsePrice, parseQuery } from './text.js';
+import { classify, cleanTitle, cleanUrl, flagOutliers, matches, parseInstallment, parsePrice, parseQuery } from './text.js';
 
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const cache = new Map();
@@ -42,6 +42,7 @@ export function toOffers(site, rawItems, parsed) {
       url,
       image: item.image ?? null,
       offers: item.offers ?? null,
+      installment: parseInstallment(item.installmentText ?? item.text),
       flag: classify(title, parsed),
     });
   }

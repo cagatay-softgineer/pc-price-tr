@@ -2,7 +2,8 @@
 // products off it. Extractors run INSIDE the page (page.evaluate), so every
 // function here must be self-contained: no closures over module scope.
 //
-// Extractor result items: { title, price, url, image?, offers?, inStock? }
+// Extractor result items: { title, price, url, image?, offers?, inStock?, text? }
+// `text` is the card's visible text and badge alt/title, read for instalment badges.
 // `price` may be a number or the store's printed text; src/text.js parses it.
 // A site with `details` returns items without prices; the matching ones are
 // then opened one by one and priced by `details.extract`.
@@ -29,12 +30,15 @@ export function extractCards(cfg) {
     const image = img && (img.getAttribute('data-src') || img.getAttribute('src'));
     const offers = cfg.offers ? clean(one(card, cfg.offers)?.textContent) : undefined;
     if (!title || !prices.length) continue;
+    // Card text plus badge images' alt/title: where stores print "Peşin Fiyatına 9 Taksit".
+    const badges = [...card.querySelectorAll('img[alt], [title]')].map((e) => e.getAttribute('alt') || e.getAttribute('title'));
     out.push({
       title,
       price: cfg.lastPrice ? prices[prices.length - 1] : prices[0],
       url: abs(lEl?.getAttribute('href')),
       image: image && !image.startsWith('data:') ? abs(image) : null,
       offers,
+      text: clean(`${card.textContent} ${badges.join(' ')}`).slice(0, 600),
     });
   }
   return out;
@@ -151,6 +155,40 @@ export function extractProductPage() {
   return meta?.content ? { price: meta.content } : { price: null };
 }
 
+/**
+ * Some stores keep the instalment badge only in the page's inline JSON, next to
+ * the product's url (Trendyol `tagDetails`, n11 `badge`). For each url, returns
+ * the "…taksit…" phrases found between the previous product's url and this one,
+ * or '' when there are none. Runs in the page, so it must stay self-contained.
+ */
+export function scriptInstallments(urls) {
+  const text = [...document.querySelectorAll('script:not([src])')]
+    .map((s) => s.textContent || '')
+    .filter((t) => /taksit/i.test(t))
+    .map((t) => t.replace(/\\u002f/gi, '/').replace(/\\\//g, '/').replace(/\\"/g, '"'))
+    .join('\n');
+  const find = (p) => {
+    for (let i = text.indexOf(p); i >= 0; i = text.indexOf(p, i + 1)) {
+      if (!/[\w-]/.test(text[i + p.length] || '')) return i; // not a longer path
+    }
+    return -1;
+  };
+  const pos = urls.map((u) => {
+    try {
+      return u ? find(new URL(u).pathname) : -1;
+    } catch {
+      return -1;
+    }
+  });
+  const sorted = pos.filter((p) => p >= 0).sort((a, b) => a - b);
+  return pos.map((p) => {
+    if (p < 0) return '';
+    const prev = sorted.filter((q) => q < p).pop() ?? -1;
+    const seg = text.slice(Math.max(prev + 1, p - 6000), p);
+    return (seg.match(/[^"{}[\],]{0,40}taksit[^"{}[\],]{0,40}/gi) || []).join(' ');
+  });
+}
+
 const enc = encodeURIComponent;
 const slug = (q) => q.trim().toLowerCase().replace(/\s+/g, '-');
 
@@ -183,6 +221,7 @@ export const SITES = [
     kind: 'store',
     url: (q) => `https://www.trendyol.com/sr?q=${enc(q)}`,
     waitFor: 'a.product-card',
+    scriptBadges: scriptInstallments,
     extract: extractCards,
     cfg: {
       card: 'a.product-card',
@@ -212,6 +251,7 @@ export const SITES = [
     kind: 'store',
     url: (q) => `https://www.n11.com/arama?q=${enc(q)}`,
     waitFor: 'script[type="application/ld+json"]',
+    scriptBadges: scriptInstallments,
     extract: extractJsonLd,
   },
   {

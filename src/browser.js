@@ -102,6 +102,10 @@ export async function scrape(site, query, { timeoutMs = 45000, keep = () => true
     await page.waitForSelector(site.waitFor, { state: 'attached', timeout: 15000 }).catch(() => {});
     await page.waitForTimeout(800);
     const items = await page.evaluate(site.extract, site.cfg ?? null);
+    if (site.scriptBadges && items.length) {
+      const badges = await page.evaluate(site.scriptBadges, items.map((i) => i.url));
+      items.forEach((item, i) => (item.installmentText = [item.text, badges[i]].filter(Boolean).join(' ')));
+    }
     const blocked = site.details ? await priceFromDetailPages(ctx, site, items, keep) : 0;
     if (blocked) {
       return {

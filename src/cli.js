@@ -8,12 +8,13 @@ const args = process.argv.slice(2);
 const flag = (name) => args.find((a) => a.startsWith(`--${name}=`))?.split('=')[1];
 const query = args.filter((a) => !a.startsWith('--')).join(' ');
 if (!query) {
-  console.error('Usage: node src/cli.js "<query> [-exclude ...]" [--sites=a,b] [--top=N] [--all] [--json]');
+  console.error('Usage: node src/cli.js "<query> [-exclude ...]" [--sites=a,b] [--top=N] [--all] [--taksit] [--json]');
   process.exit(1);
 }
 const top = Number(flag('top') ?? 20);
 const json = args.includes('--json');
 const showAll = args.includes('--all');
+const onlyCash = args.includes('--taksit'); // only "Peşin fiyatına taksit" offers
 
 try {
   const result = await searchAll(query, {
@@ -27,12 +28,14 @@ try {
   if (json) {
     console.log(JSON.stringify(result, null, 2));
   } else {
-    const shown = showAll ? result.offers : result.offers.filter((o) => !o.flag);
+    const base = showAll ? result.offers : result.offers.filter((o) => !o.flag);
+    const shown = onlyCash ? base.filter((o) => o.installment?.cashPrice) : base;
     const hidden = result.offers.length - shown.length;
     const note = hidden ? ` (${hidden} accessories/systems/outliers hidden; --all shows them)` : '';
     console.log(`\nCheapest ${Math.min(top, shown.length)} of ${shown.length} offers for "${query}"${note}:\n`);
     for (const o of shown.slice(0, top)) {
-      const tag = o.flag ? ` [${o.flag}]` : o.kind === 'aggregator' && o.offers ? ` [${o.offers}]` : '';
+      const cash = o.installment?.cashPrice ? ` [peşin fiyatına ${o.installment.months ? `${o.installment.months} taksit` : 'taksit'}]` : '';
+      const tag = (o.flag ? ` [${o.flag}]` : o.kind === 'aggregator' && o.offers ? ` [${o.offers}]` : '') + cash;
       console.log(`${formatTL(o.price).padStart(14)}  ${o.siteName.padEnd(17)} ${o.title.slice(0, 80)}${tag}`);
       console.log(`${''.padStart(14)}  ${o.url}`);
     }

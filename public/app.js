@@ -83,7 +83,17 @@ async function search(q, fresh) {
 function visibleOffers() {
   const showHidden = $('#showHidden').checked;
   const showAgg = $('#showAgg').checked;
-  return state.offers.filter((o) => (showHidden || !o.flag) && (showAgg || o.kind !== 'aggregator'));
+  const onlyCash = $('#onlyCash').checked;
+  return state.offers.filter(
+    (o) => (showHidden || !o.flag) && (showAgg || o.kind !== 'aggregator') && (!onlyCash || o.installment?.cashPrice),
+  );
+}
+
+/** "Peşin fiyatına 9 taksit" when the store promises the cash price, else a plain "9 taksit". */
+function installmentLabel(inst) {
+  if (!inst) return '';
+  const n = inst.months ? `${inst.months} taksit` : 'taksit';
+  return inst.cashPrice ? `Peşin fiyatına ${n}` : n;
 }
 
 function renderStores() {
@@ -117,6 +127,7 @@ function renderTable() {
     .map((o, i) => {
       const badges = [
         o.kind === 'aggregator' && o.offers ? `<span class="badge">${esc(o.offers)}</span>` : '',
+        o.installment ? `<span class="badge${o.installment.cashPrice ? ' cash' : ''}">${esc(installmentLabel(o.installment))}</span>` : '',
         o.flag ? `<span class="badge flag">${FLAG_LABEL[o.flag]}</span>` : '',
       ].join('');
       const cls = [o.price === cheapest && !o.flag ? 'cheapest' : '', o.flag ? 'hidden-row' : ''].join(' ');
@@ -234,6 +245,7 @@ async function init() {
   };
   $('#showHidden').onchange = renderTable;
   $('#showAgg').onchange = renderTable;
+  $('#onlyCash').onchange = renderTable;
   $('#recheck').onclick = recheckBuild;
   render();
   renderBuild();
