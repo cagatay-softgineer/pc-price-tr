@@ -1,0 +1,20 @@
+{
+  "name": "pc-price-tr",
+  "version": "0.1.0",
+  "description": "Cheapest PC parts across Turkish stores (Akakçe, Trendyol, Hepsiburada, İtopya, İncehesap, ...)",
+  "scripts": {
+    "test": "node --test",
+    "start": "node src/server.js",
+    "search": "node src/cli.js",
+    "unlock": "node src/unlock.js",
+    "check:extractors": "node scripts/try-extract.mjs"
+  },
+  "type": "module",
+  "dependencies": {
+    "playwright-core": "^1.56.1"
+  },
+  "private": "true",
+  "engines": {
+    "node": ">=20"
+  }
+}

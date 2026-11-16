@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PC Price TR</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%228%22 fill=%22%23e8590c%22/%3E%3Ctext x=%2216%22 y=%2223%22 font-size=%2220%22 font-family=%22sans-serif%22 font-weight=%22bold%22 text-anchor=%22middle%22 fill=%22white%22%3E%E2%82%BA%3C/text%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="top">
+      <div class="brand">
+        <span class="logo">₺</span>
+        <div>
+          <h1>PC Price TR</h1>
+          <p>Cheapest PC parts across Turkish stores</p>
+        </div>
+      </div>
+      <form id="search" class="search" autocomplete="off">
+        <input id="q" name="q" type="search" placeholder="e.g. rtx 4060 -ti   ·   ryzen 7 7800x3d   ·   32gb ddr5 6000" required />
+        <button type="submit">Search</button>
+        <label class="fresh" title="Ignore the 10-minute cache"><input id="fresh" type="checkbox" /> fresh</label>
+      </form>
+      <p class="hint">Every word must appear in the title. Prefix a word with <code>-</code> to exclude it (<code>-ti</code>, <code>-laptop</code>).</p>
+    </header>
+
+    <main>
+      <section class="results">
+        <div id="stores" class="stores" aria-label="Stores"></div>
+        <div class="toolbar">
+          <div id="summary" class="summary"></div>
+          <div class="toggles">
+            <label><input id="showAgg" type="checkbox" checked /> Akakçe/Epey listings</label>
+            <label><input id="showHidden" type="checkbox" /> show hidden</label>
+          </div>
+        </div>
+        <div id="best" class="best"></div>
+        <div class="table-wrap">
+          <table id="table">
+            <thead>
+              <tr><th class="num">Price</th><th>Store</th><th>Product</th><th></th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+          <p id="empty" class="empty">Search for a part to compare prices.</p>
+        </div>
+        <p id="unsupported" class="footnote"></p>
+      </section>
+
+      <aside class="build">
+        <div class="build-head">
+          <h2>My build</h2>
+          <button id="recheck" class="ghost" type="button">Re-check prices</button>
+        </div>
+        <ol id="buildList"></ol>
+        <div class="total"><span>Total</span><strong id="buildTotal">₺0</strong></div>
+        <p class="footnote">Saved in this browser. Add parts with <b>+</b> on any result.</p>
+      </aside>
+    </main>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
