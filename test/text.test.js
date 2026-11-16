@@ -81,3 +81,62 @@ test('cleanTitle drops ad labels', () => {
   assert.equal(cleanTitle('Sponsorlu Reklam - AMD Ryzen 7 7800X3D'), 'AMD Ryzen 7 7800X3D');
   assert.equal(cleanTitle('AMD Ryzen 7 7800X3D'), 'AMD Ryzen 7 7800X3D');
 });
+
+// ---- correctness fixes ----
+
+test('matches keeps each query word together and in order', () => {
+  const q = parseQuery('32gb ddr5');
+  assert.ok(!matches('Kingston Fury 32GB DDR4 3200MHz CL16 5 Yıl Garanti', q)); // "ddr" and "5" are far apart
+  assert.ok(matches('Corsair Vengeance 32GB DDR5 6000MHz', q));
+  assert.ok(matches('Corsair Vengeance DDR5 32GB', q)); // order between words stays free
+});
+
+test('matches rejects a glued variant suffix (7600X is not 7600)', () => {
+  const ryzen = parseQuery('ryzen 5 7600');
+  assert.ok(!matches('AMD Ryzen 5 7600X 4.7GHz AM5 İşlemci', ryzen));
+  assert.ok(!matches('AMD Ryzen 5 7600X3D AM5 İşlemci', ryzen));
+  assert.ok(matches('AMD Ryzen 5 7600 3.8GHz AM5 İşlemci', ryzen));
+  assert.ok(!matches('Intel Core i5 12400F 2.5GHz', parseQuery('i5 12400')));
+  assert.ok(matches('Intel Core i5 12400 2.5GHz', parseQuery('i5 12400')));
+  // units and the "Ti" suffix are not variants
+  assert.ok(matches('Corsair RM750e 750W 80+ Gold', parseQuery('750')));
+  assert.ok(matches('ASUS DUAL-RTX4060TI-O8G', parseQuery('rtx 4060')));
+});
+
+test('classify does not hide real parts that merely mention other parts', () => {
+  const t = (q, title) => classify(title, parseQuery(q));
+  assert.equal(t('b760m anakart', 'ASUS PRIME B760M-K D4 Intel B760 LGA1700 DDR4 5333MHz M.2 NVMe mATX Anakart'), null);
+  assert.equal(t('b650', 'Gigabyte B650 Gaming X AX AMD Ryzen AM5 DDR5 M.2 NVMe SSD ATX Anakart'), null);
+  assert.equal(t('wifi 6', 'TP-Link Archer TX55E AX3000 Wi-Fi 6 Bluetooth 5.2 PCIe Adaptör'), null);
+  assert.equal(t('750w', 'Corsair RM750e 750W 80+ Gold Tam Modüler Kablo Güç Kaynağı'), null);
+  assert.equal(t('ssd 1tb', 'Samsung 990 Pro 1TB NVMe M.2 SSD PS5 Uyumlu'), null);
+  assert.equal(t('ddr5 32gb', 'Corsair Vengeance 32GB DDR5 6000MHz Intel XMP AMD Ryzen Uyumlu RAM'), null);
+  // ...while real accessories are still caught
+  assert.equal(t('rtx 4060', 'Engo Lenovo Loq Rtx 4060 İle Uyumlu Mat Ekran Koruyucu'), 'accessory');
+  assert.equal(t('rtx 4060', 'RTX 4060 ile uyumlu Sıvı Soğutma Kablo Seti'), 'accessory');
+  assert.equal(t('rtx 4060', 'Laptop Şarj Aleti Adaptör 150W Dell RTX 4060'), 'accessory');
+});
+
+test('parsePrice ignores percentages and installment plans, and picks the sale price', () => {
+  assert.equal(parsePrice('%10 indirim 4.500 TL'), 4500);
+  assert.equal(parsePrice('4.500 TL %10 İndirim'), 4500);
+  assert.equal(parsePrice('5.000 TL4.500 TL'), 4500); // old price glued to the new one
+  assert.equal(parsePrice('Sepette 4.275 TL'), 4275);
+  assert.equal(parsePrice('15.565,25 TL12 site, 19 fiyat'), 15565.25); // Epey
+  assert.equal(parsePrice('12 x 375 TL'), null); // a monthly instalment is not the price
+  assert.equal(parsePrice('9 Taksit'), null);
+});
+
+test('flagOutliers needs enough offers and measures against the lower quartile', () => {
+  const broad = [450, 900, 1800, 2400, 3500, 4200, 6000, 9000].map((price) => ({ price, flag: null }));
+  assert.ok(flagOutliers(broad).every((o) => o.flag === null), 'a wide but continuous spread is not an outlier');
+  const few = [100, 22000, 23000].map((price) => ({ price, flag: null }));
+  assert.ok(flagOutliers(few).every((o) => o.flag === null), 'too few offers to judge');
+});
+
+test('cleanUrl only lets http(s) links through', () => {
+  assert.equal(cleanUrl('javascript:alert(1)'), null);
+  assert.equal(cleanUrl('data:text/html,<script>1</script>'), null);
+  assert.equal(cleanUrl('not a url'), null);
+  assert.equal(cleanUrl('https://www.trendyol.com/x-p-1'), 'https://www.trendyol.com/x-p-1');
+});
