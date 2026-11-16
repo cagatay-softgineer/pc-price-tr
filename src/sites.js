@@ -275,15 +275,6 @@ export const SITES = [
     },
   },
   {
-    id: 'itopya',
-    name: 'İtopya',
-    kind: 'store',
-    url: (q) => `https://www.itopya.com/ara?bul=${enc(q)}`,
-    waitFor: '.product',
-    extract: extractCards,
-    cfg: { card: 'div.product', title: 'a.title', price: '.product-price strong, .product-price', link: 'a.title' },
-  },
-  {
     id: 'incehesap',
     name: 'İncehesap',
     kind: 'store',
@@ -417,6 +408,7 @@ export const UNSUPPORTED = [
   { id: 'cimri', name: 'Cimri', reason: 'Cloudflare blocks automated Chrome ("Attention Required")' },
   { id: 'teknosa', name: 'Teknosa', reason: 'Cloudflare blocks automated Chrome ("Attention Required")' },
   { id: 'gaming', name: 'Gaming.gen.tr', reason: 'Search redirects to a single product page' },
+  { id: 'itopya', name: 'İtopya', reason: 'Result cards carry no prices in the page (empty price element, no price request) as of 2026-11-16' },
   { id: 'gamegaraj', name: 'GameGaraj', reason: 'Search results appear in an in-page overlay, with no result-page URL to open' },
   { id: 'inventus', name: 'İnventus', reason: 'Search is a form post-back, with no result-page URL to open' },
   { id: 'gencergaming', name: 'Gençer Gaming', reason: 'Showed "Mağaza Güncelleniyor" (HTTP 503) when checked' },

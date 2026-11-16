@@ -3,7 +3,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright-core';
-import { extractCards, extractJsonLd, scriptInstallments } from '../src/sites.js';
+import { extractCards, extractIncehesapSuggest, extractJsonLd, scriptInstallments } from '../src/sites.js';
 
 let browser;
 before(async () => {
@@ -95,6 +95,28 @@ test('extractJsonLd reads schema.org availability into inStock', async (t) => {
     await page.setContent(`<body><script type="application/ld+json">${JSON.stringify(ld)}</script></body>`);
     const items = await page.evaluate(extractJsonLd);
     assert.deepEqual(items.map((i) => i.inStock), [true, false, false, undefined]);
+  } finally {
+    await page.close();
+  }
+});
+
+test('extractIncehesapSuggest turns the suggest endpoint JSON into product links and stock', async (t) => {
+  if (!browser) return t.skip('no Chrome or Edge installed');
+  const page = await browser.newPage();
+  try {
+    const body = JSON.stringify({ u: [
+      { a: 'MSI GeForce RTX 4060 VENTUS 2X BLACK 8G', u: 'msi-geforce-4060-ventus-2x-black-8g-gaming-ekran-karti', id: 64838, r: '/img/a.jpg', satis_durumu: 1 },
+      { a: 'PNY RTX 4060 Ti VERTO 8GB', u: 'pny-rtx-4060-ti-verto-8gb', id: 63479, r: '', satis_durumu: 0 },
+    ] });
+    await page.route('**/*', (r) => r.fulfill({ body, contentType: 'text/html; charset=utf-8' }));
+    await page.goto('https://www.incehesap.com/ajax/search.php?q=rtx%204060');
+    const items = await page.evaluate(extractIncehesapSuggest);
+    assert.equal(items[0].url, 'https://www.incehesap.com/msi-geforce-4060-ventus-2x-black-8g-gaming-ekran-karti-fiyati-64838/');
+    assert.equal(items[0].image, 'https://www.incehesap.com/img/a.jpg');
+    assert.deepEqual(items.map((i) => [i.title, i.price, i.inStock]), [
+      ['MSI GeForce RTX 4060 VENTUS 2X BLACK 8G', null, true],
+      ['PNY RTX 4060 Ti VERTO 8GB', null, false],
+    ]);
   } finally {
     await page.close();
   }
