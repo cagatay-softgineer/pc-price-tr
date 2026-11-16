@@ -1,10 +1,19 @@
 // Fan a query out to every store, normalise and filter what comes back.
 import { SITES } from './sites.js';
-import { scrape } from './browser.js';
+import { scrape as browserScrape } from './browser.js';
+import { createCache, mapLimit } from './pool.js';
 import { classify, cleanTitle, cleanUrl, flagOutliers, matches, parseInstallment, parsePrice, parseQuery } from './text.js';
 
-const CACHE_TTL_MS = 10 * 60 * 1000;
-const cache = new Map();
+// Store pages open at once. More is faster but heavier on the machine, and
+// looks more like a bot to the stores.
+const TABS = Number(process.env.PCPRICE_TABS) || 5;
+const cache = createCache({ ttlMs: 10 * 60 * 1000, max: 300 });
+
+/** 'all' for every store, else the chosen store ids sorted: the key of a history series. */
+export function scopeOf(siteIds) {
+  const ids = [...new Set(siteIds ?? [])].filter((id) => SITES.some((s) => s.id === id));
+  return !ids.length || ids.length === SITES.length ? 'all' : ids.sort().join(',');
+}
 
 /** The words sent to the stores: the query minus "-exclusions". */
 export function storeQuery(query) {
@@ -49,15 +58,16 @@ export function toOffers(site, rawItems, parsed) {
   return { offers, dropped };
 }
 
-export async function searchSite(site, query, { fresh = false } = {}) {
+/** One store. `deep` also reads its second result page, where the store supports it. */
+export async function searchSite(site, query, { fresh = false, deep = false, signal, scrape = browserScrape } = {}) {
   const parsed = parseQuery(query);
   const q = storeQuery(query);
-  const key = `${site.id}|${q.toLowerCase()}`;
-  let raw = cache.get(key);
-  let cached = true;
-  if (fresh || !raw || Date.now() - raw.at > CACHE_TTL_MS) {
-    raw = { at: Date.now(), ...(await scrape(site, q, { keep: (title) => matches(cleanTitle(title), parsed) })) };
-    cached = false;
+  const pages = deep ? 2 : 1;
+  const key = `${site.id}|${pages}|${q.toLowerCase()}`;
+  let raw = fresh ? undefined : cache.get(key);
+  const cached = Boolean(raw);
+  if (!raw) {
+    raw = await scrape(site, q, { keep: (title) => matches(cleanTitle(title), parsed), pages, signal });
     if (raw.status === 'ok') cache.set(key, raw);
   }
   const { offers, dropped } = toOffers(site, raw.items, parsed);
@@ -74,17 +84,25 @@ export async function searchSite(site, query, { fresh = false } = {}) {
   };
 }
 
-/** Search the chosen stores in parallel; onSite fires as each one finishes. */
-export async function searchAll(query, { siteIds, onSite, fresh } = {}) {
+/**
+ * Search the chosen stores, `tabs` at a time; onSite fires as each one finishes.
+ * Once `signal` aborts, no further store is opened and nothing more is reported.
+ */
+export async function searchAll(query, { siteIds, onSite, fresh, deep, signal, tabs = TABS, scrape } = {}) {
   if (!parseQuery(query).include.length) throw new Error('Empty query');
   const sites = siteIds?.length ? SITES.filter((s) => siteIds.includes(s.id)) : SITES;
-  const results = await Promise.all(
-    sites.map(async (site) => {
-      const r = await searchSite(site, query, { fresh });
+  const done = await mapLimit(
+    sites,
+    tabs,
+    async (site) => {
+      const r = await searchSite(site, query, { fresh, deep, signal, scrape });
+      if (signal?.aborted) return null;
       onSite?.(r);
       return r;
-    }),
+    },
+    signal,
   );
+  const results = done.filter(Boolean);
   const offers = flagOutliers(results.flatMap((r) => r.offers)).sort((a, b) => a.price - b.price);
   return { query, results, offers };
 }

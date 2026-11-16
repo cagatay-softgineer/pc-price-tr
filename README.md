@@ -22,6 +22,7 @@ npm start                      # web app at http://127.0.0.1:4870
 npm run search -- "rtx 4060 -ti"            # terminal, cheapest 20
 npm run search -- "ryzen 7 7800x3d" --top=10 --sites=akakce,trendyol --all --json
 npm run search -- "rtx 4060" --taksit      # only offers that say "Peşin fiyatına taksit"
+npm run search -- "ssd 1tb" --deep         # also read page 2 where the store has one
 npm run unlock                 # pass a store's "verify you are human" check by hand
 npm test                       # parsing, matching, flagging, server and per-store extractor tests
 ```
@@ -42,9 +43,26 @@ A word you searched for is never treated as noise. `klavye` finds keyboards, for
 
 **My build** (web app). Use **+** on any result to add it to a parts list with a running total, saved in your browser. **Re-check prices** re-runs each part's search, updates the saved listing's price, and points out a cheaper store offer if one appeared.
 
-**Price history** (web app). Each search is remembered in `.cache/history.json` (not committed), and the chart under the price spread shows the lowest price of that search over time. Tick **Median** to add the median, or press **h** on a selected row (or its chart icon) for that one offer's price over time. The stores don't publish their old prices, so history starts the first time you search and grows with every search after that; a search has one point per half hour at most. A different set of ticked stores is a separate series, because switching a store off changes the lowest price. Offers not seen for 180 days are forgotten.
+**Price history.** Each search, from the web app or the CLI, is remembered in `.cache/history.json` (not committed). The chart under the price spread shows the lowest price of that search over time. Tick **Median** to add the median, or press **h** on a selected row (or its chart icon) for that one offer's price over time. The stores don't publish their old prices, so history starts the first time you search and grows with every search after that.
 
-Results are cached for 10 minutes per store and query. Tick **fresh** (or use **Re-check**) to bypass the cache.
+- A search adds one point per half hour at most.
+- Only real stores count: Akakçe and Epey rows summarise other stores, so they don't set the lowest price. "Best price" in the web app uses the same rule.
+- A different set of ticked stores is a separate series, because switching a store off changes the lowest price.
+- A point remembers which stores did not answer. It is drawn as a hollow dot, and the tooltip and table name the stores, because a missing store can fake a price jump.
+- A page-2 search updates each offer's history but adds no point to the search's line, since reading more offers can lower the lowest price on its own.
+- Offers not seen for 180 days are forgotten.
+
+**Price moves.** A listing whose price changed since an earlier search gets a badge such as "↓ ₺400". Hover it for the old price and date. The CLI prints the same as "(↓ was ₺X on 12 Kas)".
+
+**Watching** (web app). Press **Watch** on a search's price history to follow its lowest price in the side panel. Each watched search keeps the stores that were ticked when you added it. On page load the panel reads the history, without opening any store, and says what got cheaper since your last visit. **Check prices** searches every watched query again, one at a time.
+
+**A store that suddenly finds nothing.** If a store returns no results for a search where it had offers before, its chip shows `0 !` with a warning. Usually that means its page layout changed and its reader needs fixing (see *Adding or fixing a store*).
+
+**Page 2.** Most stores show 20 to 50 results per page. Tick **page 2** (or pass `--deep`) to also read the second page at the 11 stores where it was checked to return new results: Akakçe, Trendyol, Hepsiburada, n11, Amazon, Vatan, MediaMarkt, Sinerji, PttAVM, Pazarama and Teknobiyotik. That roughly doubled the offers for "ssd 1tb" (297 to 515) and took 18 s instead of 12 s.
+
+**Thumbnails.** Rows show the store's product photo when the card has one. Icons, lazy-load placeholders, brand logos and promo stickers are skipped, so Trendyol and a few small stores show none.
+
+Results are cached for 10 minutes per store, query and page depth (at most 300 entries). Tick **fresh** (or use **Re-check** / **Check prices**) to bypass the cache. At most 5 store pages are open at once (`PCPRICE_TABS` changes that), and closing the page or starting a new search stops the old one from opening more.
 
 ## Stores
 
@@ -85,8 +103,10 @@ Only one process can use `.browser-profile/` at a time. Stop the server before r
 src/text.js      pure helpers: price parsing, normalisation, matching, flagging (shared with the UI)
 src/sites.js     store registry + in-page extractors
 src/browser.js   shared persistent Chrome session, challenge handling, detail-page pricing
-src/search.js    fan-out, cache, offer normalisation
+src/search.js    fan-out (5 tabs at a time, cancellable), cache, offer normalisation
+src/pool.js      concurrency limit and the size-capped cache
 src/history.js   price history store (.cache/history.json); src/chart.js has the chart maths shared with the UI
+src/watch.js     "what changed" for the watchlist (shared with the UI)
 src/server.js    local HTTP server + SSE search stream
 src/cli.js       terminal search
 src/unlock.js    open the profile visibly to pass checks by hand

@@ -350,7 +350,7 @@ td.title a:hover { text-decoration: underline; }
 .badge { display: inline-block; font-size: 11px; font-weight: 550; padding: 1px 6px; border-radius: 4px; background: var(--chip); color: var(--muted); margin-left: 6px; white-space: nowrap; }
 .badge.flag { color: var(--warn); }
 .badge.cash { background: var(--good-bg); color: var(--good); font-weight: 650; }
-td.act { width: 1%; }
+td.act { width: 1%; white-space: nowrap; }
 td.act button { padding: 1px 9px; font-size: 16px; line-height: 1.4; }
 .skel td { height: 41px; }
 .skel i { display: block; height: 12px; border-radius: 6px; background: linear-gradient(90deg, var(--chip), var(--raised), var(--chip)) 0 0 / 200% 100%; animation: shimmer 1.4s linear infinite; }
@@ -433,3 +433,25 @@ button { transition: filter var(--t-quick), background var(--t-quick), scale var
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* ---------- watchlist, price moves, thumbnails, missing stores ---------- */
+.sr { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.store[data-state='warn'] .n { color: var(--warn); font-weight: 650; }
+.hdot.miss { fill: var(--panel); stroke: var(--series); }
+.tip .miss { color: var(--warn); }
+.badge.down { background: var(--good-bg); color: var(--good); font-weight: 650; }
+.badge.up { color: var(--bad); }
+.thumb { float: left; width: 36px; height: 36px; margin: 1px 10px 0 0; border-radius: 6px; object-fit: contain; background: #fff; border: 1px solid var(--line); }
+.thumb.none { background: var(--chip); border-color: transparent; }
+td.title > div { overflow: hidden; }
+.watch { margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+#watchList { list-style: none; padding: 0; margin: 10px 0 0; display: grid; gap: 8px; }
+#watchList .part { display: flex; gap: 8px; align-items: baseline; }
+#watchList .wq { flex: 1; min-width: 0; text-align: left; background: none; padding: 0; font: inherit; font-weight: 650; font-size: 14px; color: var(--text); cursor: pointer; overflow-wrap: anywhere; }
+#watchList .wq:hover { text-decoration: underline; }
+#watchList .price { font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums; }
+#watchList .badge { margin-left: 0; }
+#watchList .meta { font-size: 12px; color: var(--muted); }
+#watchList .rm { background: none; color: var(--muted); padding: 0 4px; font-size: 14px; }
+#watchList .rm:hover { color: var(--bad); }
+#hWatch[aria-pressed='true'] { color: var(--series); font-weight: 650; }

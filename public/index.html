@@ -35,6 +35,7 @@
           </div>
           <button type="submit" class="primary">Search</button>
           <label class="fresh" title="Ignore the 10-minute cache"><input id="fresh" type="checkbox" /> fresh</label>
+          <label class="fresh" title="Also read page 2 at the 11 stores that have one. Slower, finds more."><input id="deep" type="checkbox" /> page 2</label>
         </form>
         <button id="theme" class="ghost icon-btn" type="button" title="Switch theme" aria-label="Switch theme">Auto</button>
       </div>
@@ -66,6 +67,7 @@
           <div class="hctl">
             <label class="tgl"><input id="hMed" type="checkbox" /> Median</label>
             <button id="hClose" class="ghost" type="button" hidden>Back to this search</button>
+            <button id="hWatch" class="ghost" type="button" aria-pressed="false" hidden>Watch</button>
           </div>
           <div id="hchart" class="hchart"></div>
           <div id="htip" class="tip htip" hidden></div>
@@ -110,6 +112,13 @@
       </section>
 
       <aside class="build">
+        <section class="watch" aria-labelledby="watchTitle">
+          <div class="build-head">
+            <h2 id="watchTitle">Watching</h2>
+            <button id="checkWatch" class="ghost" type="button" hidden>Check prices</button>
+          </div>
+          <ul id="watchList"></ul>
+        </section>
         <div class="build-head">
           <h2>My build</h2>
           <div class="build-actions">

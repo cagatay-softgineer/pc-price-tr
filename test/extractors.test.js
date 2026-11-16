@@ -121,3 +121,28 @@ test('extractIncehesapSuggest turns the suggest endpoint JSON into product links
     await page.close();
   }
 });
+
+test('extractCards picks the product photo, not icons, placeholders or brand logos', async (t) => {
+  if (!browser) return t.skip('no Chrome or Edge installed');
+  const items = await run(
+    `<div class="c"><a class="t" href="/p/1">PNY CS900 1TB</a><span class="p">1.999 TL</span>
+       <img src="https://x.test/icons/heart.svg"><img src="https://x.test/badge.png" alt="">
+       <img src="https://cdn.test/p/cs900.webp" alt="PNY CS900 1TB"></div>
+     <div class="c"><a class="t" href="/p/2">MSI SSD</a><span class="p">2.999 TL</span>
+       <img src="/uploads/marka/msi-logo.webp" alt="MSI"></div>
+     <div class="c"><a class="t" href="/p/3">Kingston NV3</a><span class="p">3.999 TL</span>
+       <img src="https://cdn.test/images/product-card-placeholder.svg" alt="Kingston NV3"></div>
+     <div class="c"><a class="t" href="/p/4">Hiksemi 1TB</a><span class="p">1.499 TL</span>
+       <picture><source srcset="https://cdn.test/s/1.jpg/format:webp 1x"><img alt="Hiksemi 1TB"></picture></div>
+     <div class="c"><a class="t" href="/p/5">Kodak X300s</a><span class="p">2.499 TL</span>
+       <img src="https://cdn.test/images/product-card-placeholder.svg" alt="Kodak X300s">
+       <img src="https://cdn.test/mnresize/150/-/indexing-sticker-stamp/a.png" alt="Damga">
+       <img src="https://cdn.test/marketing/datascience/EnCokSatan.png" alt="Damga">
+       <img src="https://cdn.test/banners/s/1/badge_copy1.png" alt=""></div>`,
+    { card: '.c', title: '.t', price: '.p', link: '.t' },
+  );
+  assert.deepEqual(
+    items.map((i) => i.image),
+    ['https://cdn.test/p/cs900.webp', null, null, 'https://cdn.test/s/1.jpg/format:webp', null],
+  );
+});

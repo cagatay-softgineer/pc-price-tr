@@ -14,9 +14,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SITES, UNSUPPORTED } from './sites.js';
-import { searchAll as defaultSearchAll } from './search.js';
+import { scopeOf, searchAll as defaultSearchAll } from './search.js';
 import { closeBrowser, getContext } from './browser.js';
-import { createHistory } from './history.js';
+import { createHistory, HISTORY_FILE } from './history.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]', '::1']);
@@ -28,6 +28,7 @@ const STATIC = {
   '/styles.css': ['public/styles.css', 'text/css; charset=utf-8'],
   '/lib/text.js': ['src/text.js', 'text/javascript; charset=utf-8'],
   '/lib/chart.js': ['src/chart.js', 'text/javascript; charset=utf-8'],
+  '/lib/watch.js': ['src/watch.js', 'text/javascript; charset=utf-8'],
 };
 
 function sendJson(res, status, body) {
@@ -52,12 +53,6 @@ export function isSameOrigin(origin, hostHeader) {
   }
 }
 
-/** 'all' for every store, else the chosen store ids sorted: the key of a history series. */
-function scopeOf(siteIds) {
-  const ids = [...new Set(siteIds ?? [])].filter((id) => SITES.some((s) => s.id === id));
-  return !ids.length || ids.length === SITES.length ? 'all' : ids.sort().join(',');
-}
-
 export function createServer({ searchAll = defaultSearchAll, host = '127.0.0.1', history = null } = {}) {
   const guardHost = LOOPBACK.has(host.toLowerCase());
 
@@ -70,22 +65,50 @@ export function createServer({ searchAll = defaultSearchAll, host = '127.0.0.1',
       'cache-control': 'no-cache',
       connection: 'keep-alive',
     });
+    res.flushHeaders(); // the page knows the stream is open before the first store answers
     const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    // The page went away (closed, or a new search started): stop opening store tabs.
+    const ac = new AbortController();
+    res.on('close', () => {
+      if (!res.writableEnded) ac.abort();
+    });
+    const scope = scopeOf(siteIds);
+    const known = history ? history.siteCounts(q, scope) : {};
+    const deep = url.searchParams.get('deep') === '1';
     try {
       const result = await searchAll(q, {
         siteIds,
         fresh: url.searchParams.get('fresh') === '1',
-        onSite: (r) => send('site', r),
+        deep,
+        signal: ac.signal,
+        onSite: (r) => {
+          if (history) annotate(r, known[r.site]);
+          send('site', r);
+        },
       });
+      if (ac.signal.aborted) return; // partial: not worth recording
       send('done', { query: q, offers: result.offers });
       if (history) {
-        history.record(q, result.offers, { scope: scopeOf(siteIds) });
+        // A page-2 search reads more offers, so its lowest price would not be comparable.
+        history.record(q, result.offers, { scope, results: result.results, queryPoint: !deep });
         history.save().catch((e) => console.error('history:', e.message));
       }
     } catch (e) {
       send('fail', { error: e.message });
+    } finally {
+      res.end();
     }
-    res.end();
+  }
+
+  /** Add what the history knows: each offer's previous price, and a warning when a store suddenly finds nothing. */
+  function annotate(r, knownCount) {
+    for (const o of r.offers ?? []) {
+      const prev = history.priceBefore(o.url, o.price);
+      if (prev) o.prev = prev;
+    }
+    if (r.status === 'ok' && !r.found && knownCount > 0) {
+      r.warning = `Found nothing, but it had ${knownCount} offers for this search before. Its page may have changed.`;
+    }
   }
 
   function handleHistory(res, url) {
@@ -139,7 +162,7 @@ export function createServer({ searchAll = defaultSearchAll, host = '127.0.0.1',
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const PORT = Number(process.env.PORT || 4870);
   const HOST = process.env.HOST || '127.0.0.1';
-  const server = createServer({ host: HOST, history: createHistory({ file: path.join(ROOT, '.cache', 'history.json') }) });
+  const server = createServer({ host: HOST, history: createHistory({ file: HISTORY_FILE }) });
   server.listen(PORT, HOST, () => {
     console.log(`pc-price-tr running at http://${HOST}:${PORT}`);
     // Warm the browser so the first search doesn't pay Chrome's start-up.

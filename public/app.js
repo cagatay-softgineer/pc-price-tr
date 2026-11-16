@@ -1,5 +1,6 @@
 import { flagOutliers, formatTL, median } from '/lib/text.js';
 import { linearScale, linePath, niceTicks, stepPath, timeTicks } from '/lib/chart.js';
+import { lastChange } from '/lib/watch.js';
 
 const $ = (sel) => document.querySelector(sel);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -40,7 +41,12 @@ const state = {
   hist: null, // what the history panel shows: { mode: 'query' | 'offer', title, pts, seen }
   histBase: null, // the query's own series, kept while one offer's history is open
   histLoading: false,
+  watch: store.get('pcprice.watch', []), // [{ q, sites, addedAt }]: searches whose lowest price you follow
+  watchInfo: new Map(), // q → lastChange() of its series
+  checking: false,
 };
+
+const enabledSites = () => state.sites.filter((s) => !state.disabled.has(s.id)).map((s) => s.id);
 
 /* ---------- motion helpers ---------- */
 
@@ -91,9 +97,8 @@ function toast(msg) {
 }
 
 /** Run one search over SSE; resolves with the final offer list. */
-function runSearch(q, { fresh = false, onSite } = {}) {
-  const sites = state.sites.filter((s) => !state.disabled.has(s.id)).map((s) => s.id);
-  const url = `/api/search?q=${encodeURIComponent(q)}&sites=${sites.join(',')}${fresh ? '&fresh=1' : ''}`;
+function runSearch(q, { fresh = false, deep = false, sites = enabledSites(), onSite } = {}) {
+  const url = `/api/search?q=${encodeURIComponent(q)}&sites=${sites.join(',')}${fresh ? '&fresh=1' : ''}${deep ? '&deep=1' : ''}`;
   return new Promise((resolve, reject) => {
     const es = new EventSource(url);
     es.addEventListener('site', (e) => onSite?.(JSON.parse(e.data)));
@@ -139,9 +144,17 @@ async function search(q, fresh) {
   try {
     state.offers = await runSearch(q, {
       fresh,
+      deep: $('#deep').checked,
       onSite: (r) => {
-        const text = r.status === 'ok' ? String(r.offers.length) : r.status;
-        state.status[r.site] = { just: true, state: r.status, text, zero: r.status === 'ok' && !r.offers.length, title: r.error || `${r.found} found, ${r.offers.length} matched · ${(r.ms / 1000).toFixed(1)}s${r.cached ? ' (cached)' : ''}` };
+        const text = r.status === 'ok' ? `${r.offers.length}${r.warning ? ' !' : ''}` : r.status;
+        const detail = `${r.found} found, ${r.offers.length} matched · ${(r.ms / 1000).toFixed(1)}s${r.cached ? ' (cached)' : ''}`;
+        state.status[r.site] = {
+          just: true,
+          state: r.warning ? 'warn' : r.status,
+          text,
+          zero: r.status === 'ok' && !r.offers.length,
+          title: r.error || (r.warning ? `${r.warning} (${detail})` : detail),
+        };
         partial.push(...r.offers);
         state.offers = flagOutliers(partial).sort((a, b) => a.price - b.price);
         render();
@@ -167,8 +180,7 @@ const HIST = { h: 220, m: { l: 64, r: 22, t: 18, b: 28 } };
 async function loadHistory(q) {
   let points = null;
   try {
-    const sites = state.sites.filter((s) => !state.disabled.has(s.id)).map((s) => s.id);
-    const r = await fetch(`/api/history?q=${encodeURIComponent(q)}&sites=${sites.join(',')}`);
+    const r = await fetch(`/api/history?q=${encodeURIComponent(q)}&sites=${enabledSites().join(',')}`);
     if (r.ok) points = (await r.json()).points;
   } catch {
     /* history is optional: the page works without it */
@@ -179,10 +191,14 @@ async function loadHistory(q) {
     ? {
         mode: 'query',
         title: `Lowest price for “${q}”`,
-        pts: points.map((p) => ({ t: p.t, v: p.min, med: p.median, n: p.n, best: p.best })),
+        pts: points.map((p) => ({ t: p.t, v: p.min, med: p.median, n: p.n, best: p.best, failed: p.failed })),
       }
     : null;
   renderHistory(true);
+  if (points && isWatched(q)) {
+    state.watchInfo.set(q, lastChange(points));
+    renderWatch();
+  }
 }
 
 async function showOfferHistory(o) {
@@ -210,6 +226,7 @@ function renderHistory(animate = false) {
     $('#hTitle').textContent = 'Price history';
     $('#hClose').hidden = true;
     $('#hMed').closest('label').hidden = true;
+    $('#hWatch').hidden = true;
     return;
   }
   if (sec.hidden || sec.classList.contains('skel')) {
@@ -219,8 +236,18 @@ function renderHistory(animate = false) {
   }
   $('#hTitle').textContent = h.title;
   $('#hClose').hidden = h.mode !== 'offer' || !state.histBase;
-  $('#hMed').closest('label').hidden = h.mode !== 'query';
+  $('#hMed').closest('label').hidden = h.mode !== 'query' || h.pts.length < 2;
+  renderWatchButton();
   drawHistory(animate);
+}
+
+function renderWatchButton() {
+  const b = $('#hWatch');
+  b.hidden = !state.hist || state.hist.mode !== 'query';
+  const on = isWatched(state.query);
+  b.setAttribute('aria-pressed', String(on));
+  b.textContent = on ? 'Watching' : 'Watch';
+  b.title = on ? 'Stop watching this search' : 'Follow this search’s lowest price in your watchlist';
 }
 
 function drawHistory(animate = false) {
@@ -252,7 +279,8 @@ function drawHistory(animate = false) {
   const med = showMed
     ? `<path class="hmed" d="${linePath(pts.map((p) => [x(p.t), y(p.med)]))}"/><text class="hlbl" x="${W - m.r}" y="${y(last.med) - 6}" text-anchor="end">median</text>`
     : '';
-  const dots = xy.map(([cx, cy]) => `<circle class="hdot" cx="${cx}" cy="${cy}" r="4"/>`).join('');
+  // A hollow dot: some store did not answer that time, so the low may be too high.
+  const dots = xy.map(([cx, cy], i) => `<circle class="hdot${pts[i].failed?.length ? ' miss' : ''}" cx="${cx}" cy="${cy}" r="4"/>`).join('');
   const xTicks = timeTicks(t0, t1, Math.max(2, Math.floor(W / 110)));
   const lowest = Math.min(...pts.map((p) => p.v));
   const summary =
@@ -280,10 +308,13 @@ function drawHistory(animate = false) {
 
   const siteName = (id) => state.sites.find((s) => s.id === id)?.name ?? id;
   const query = h.mode === 'query';
-  $('#hdata').innerHTML = `<table><thead><tr><th>When</th><th class="num">${query ? 'Lowest' : 'Price'}</th>${query ? '<th class="num">Median</th><th>Cheapest at</th><th class="num">Offers</th>' : ''}</tr></thead><tbody>${[...pts]
+  const missing = (p) => (p.failed?.length ? p.failed.map(siteName).join(', ') : '');
+  const anyMissing = query && pts.some((p) => p.failed?.length);
+  $('#hdata').innerHTML = `<table><thead><tr><th>When</th><th class="num">${query ? 'Lowest' : 'Price'}</th>${query ? '<th class="num">Median</th><th>Cheapest at</th><th class="num">Offers</th>' : ''}${anyMissing ? '<th>No answer from</th>' : ''}</tr></thead><tbody>${[...pts]
     .reverse()
-    .map((p) => `<tr><td>${DATETIME.format(p.t)}</td><td class="num">${formatTL(p.v)}</td>${query ? `<td class="num">${formatTL(p.med)}</td><td>${esc(p.best ? siteName(p.best.site) : '')}</td><td class="num">${p.n}</td>` : ''}</tr>`)
+    .map((p) => `<tr><td>${DATETIME.format(p.t)}</td><td class="num">${formatTL(p.v)}</td>${query ? `<td class="num">${formatTL(p.med)}</td><td>${esc(p.best ? siteName(p.best.site) : '')}</td><td class="num">${p.n}</td>` : ''}${anyMissing ? `<td>${esc(missing(p))}</td>` : ''}</tr>`)
     .join('')}</tbody></table>`;
+  if (anyMissing) $('#hNote').textContent += ' · hollow dots: a store did not answer';
 
   const svg = box.querySelector('svg');
   const cross = svg.querySelector('.hcross');
@@ -301,7 +332,7 @@ function drawHistory(animate = false) {
     ring.setAttribute('cx', xy[k][0]);
     ring.setAttribute('cy', xy[k][1]);
     cross.hidden = ring.hidden = false;
-    tip.innerHTML = `<b>${formatTL(p.v)}</b>${query && p.best ? ` · ${esc(siteName(p.best.site))}<br>${esc(p.best.title.slice(0, 70))}` : ''}<br>${DATETIME.format(p.t)}${p.n ? ` · ${p.n} offers` : ''}`;
+    tip.innerHTML = `<b>${formatTL(p.v)}</b>${query && p.best ? ` · ${esc(siteName(p.best.site))}<br>${esc(p.best.title.slice(0, 70))}` : ''}<br>${DATETIME.format(p.t)}${p.n ? ` · ${p.n} offers` : ''}${p.failed?.length ? `<br><span class="miss">No answer from ${esc(missing(p))}</span>` : ''}`;
     tip.hidden = false;
     const sec = $('#history').getBoundingClientRect();
     tip.style.left = `${Math.max(130, Math.min(sec.width - 130, rect.left - sec.left + xy[k][0]))}px`;
@@ -394,8 +425,14 @@ function renderProgress() {
   bar.classList.toggle('done', !searching || pct === 100);
 }
 
+/**
+ * Best/median/highest over the real stores' offers. Akakçe/Epey rows summarise
+ * other stores, so they only count when no store row is shown (as in the history).
+ */
 function computeStats(list) {
-  const pool = list.map((o, i) => ({ o, i })).filter(({ o }) => !o.flag);
+  const counted = list.map((o, i) => ({ o, i })).filter(({ o }) => !o.flag);
+  const stores = counted.filter(({ o }) => o.kind !== 'aggregator');
+  const pool = stores.length ? stores : counted;
   if (!pool.length) return null;
   const prices = pool.map(({ o }) => o.price).sort((a, b) => a - b);
   const best = pool.reduce((m, p) => (p.o.price < m.o.price ? p : m));
@@ -543,6 +580,15 @@ function renderBest(list, loading) {
     .join('');
 }
 
+/** "↓ ₺400" when this listing was cheaper or dearer at an earlier search. */
+function moveBadge(o) {
+  if (!o.prev) return '';
+  const d = o.price - o.prev.price;
+  const label = `${d < 0 ? '↓' : '↑'} ${formatTL(Math.abs(d))}`;
+  const title = `Was ${formatTL(o.prev.price)} on ${DATE.format(o.prev.t)}`;
+  return `<span class="badge ${d < 0 ? 'down' : 'up'}" title="${esc(title)}"><span class="sr">${d < 0 ? 'Price down' : 'Price up'} </span>${label}<span class="sr">. ${esc(title)}</span></span>`;
+}
+
 function skeletonRows() {
   const row = '<tr class="skel"><td><i style="width:70px"></i></td><td><i style="width:50px"></i></td><td><i style="width:80px"></i></td><td><i style="width:70%"></i></td><td></td></tr>';
   return row.repeat(6);
@@ -566,7 +612,9 @@ function renderTable() {
             o.kind === 'aggregator' && o.offers ? `<span class="badge">${esc(o.offers)}</span>` : '',
             o.installment ? `<span class="badge${o.installment.cashPrice ? ' cash' : ''}">${esc(installmentLabel(o.installment))}</span>` : '',
             o.flag ? `<span class="badge flag">${FLAG_LABEL[o.flag]}</span>` : '',
+            moveBadge(o),
           ].join('');
+          const thumb = o.image ? `<img class="thumb" src="${esc(o.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" width="36" height="36">` : '<span class="thumb none"></span>';
           const isBest = stats && i === stats.bestIndex;
           // A row animates in once. A re-render during its animation (the next store answering)
           // rebuilds the row, so it resumes from where it was via a negative delay.
@@ -585,7 +633,7 @@ function renderTable() {
         <td class="num">${formatTL(o.price)}</td>
         <td class="delta">${isBest ? '<span class="low">lowest</span>' : diff}</td>
         <td class="store-cell" style="--h:${hue(o.site)}">${esc(o.siteName)}</td>
-        <td class="title"><a href="${esc(o.url)}" target="_blank" rel="noopener">${esc(o.title)}</a>${badges}</td>
+        <td class="title">${thumb}<div><a href="${esc(o.url)}" target="_blank" rel="noopener">${esc(o.title)}</a>${badges}</div></td>
         <td class="act"><button class="ghost hbtn" data-hist="${i}" tabindex="-1" title="Price history (h)" aria-label="${esc(`Price history of ${o.siteName} offer`)}"><svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true"><path d="M2 15l5-6 4 3 7-8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button><button class="ghost" data-add="${i}" title="Add to my build (a)" aria-label="${esc(`Add ${o.siteName} offer to my build`)}">+</button></td>
       </tr>`;
         })
@@ -720,6 +768,107 @@ async function recheckBuild() {
   }
 }
 
+/* ---------- watchlist: searches whose lowest price you follow ---------- */
+
+const sameQ = (a, b) => String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
+const isWatched = (q) => state.watch.some((w) => sameQ(w.q, q));
+
+function saveWatch() {
+  store.set('pcprice.watch', state.watch);
+  renderWatch();
+  renderWatchButton();
+}
+
+function toggleWatch() {
+  const q = state.query;
+  if (!q) return;
+  if (isWatched(q)) {
+    state.watch = state.watch.filter((w) => !sameQ(w.q, q));
+    state.watchInfo.delete(q);
+    toast(`Stopped watching “${q}”`);
+  } else {
+    // Its own store selection is kept, so a check later reads the same series.
+    const w = { q, sites: enabledSites(), addedAt: Date.now() };
+    state.watch.push(w);
+    toast(`Watching “${q}”. Check prices searches it again.`);
+    refreshWatchInfo(w);
+  }
+  saveWatch();
+}
+
+async function watchPoints(w) {
+  const r = await fetch(`/api/history?q=${encodeURIComponent(w.q)}&sites=${w.sites.join(',')}`);
+  return r.ok ? (await r.json()).points : [];
+}
+
+async function refreshWatchInfo(w) {
+  try {
+    state.watchInfo.set(w.q, lastChange(await watchPoints(w)));
+  } catch {
+    /* the list still shows the query */
+  }
+  renderWatch();
+}
+
+function renderWatch() {
+  const ul = $('#watchList');
+  $('#checkWatch').hidden = !state.watch.length;
+  if (!state.watch.length) {
+    ul.innerHTML = '<li class="meta">Open a search and press <b>Watch</b> on its price history to follow its lowest price.</li>';
+    return;
+  }
+  ul.innerHTML = state.watch
+    .map((w, i) => {
+      const c = state.watchInfo.get(w.q);
+      const was = c?.before ? `was ${formatTL(c.before.price)} on ${DATE.format(c.before.t)}` : '';
+      const move = c?.before
+        ? `<span class="badge ${c.diff < 0 ? 'down' : 'up'}" title="${esc(was)}"><span class="sr">${c.diff < 0 ? 'Down' : 'Up'} </span>${c.diff < 0 ? '↓' : '↑'} ${formatTL(Math.abs(c.diff))}</span>`
+        : '';
+      const meta = c ? [`checked ${DATETIME.format(c.t)}`, was, c.unsure ? 'a store did not answer, so this may not be a real change' : ''].filter(Boolean).join(' · ') : 'not searched yet';
+      return `<li><div class="part"><button type="button" class="wq" data-wq="${i}" title="Open this search">${esc(w.q)}</button><span class="price">${c ? formatTL(c.now) : '–'}</span>${move}<button type="button" class="rm" data-wrm="${i}" title="Stop watching" aria-label="${esc(`Stop watching ${w.q}`)}">✕</button></div><div class="meta">${esc(meta)}</div></li>`;
+    })
+    .join('');
+}
+
+/** Search every watched query again, one at a time, and say which got cheaper. */
+async function checkWatched() {
+  if (state.checking || !state.watch.length) return;
+  state.checking = true;
+  const btn = $('#checkWatch');
+  btn.disabled = true;
+  const cheaper = [];
+  try {
+    for (const [i, w] of [...state.watch].entries()) {
+      btn.textContent = `Checking ${i + 1}/${state.watch.length}…`;
+      const was = state.watchInfo.get(w.q)?.now;
+      await runSearch(w.q, { fresh: true, sites: w.sites });
+      const c = lastChange(await watchPoints(w));
+      state.watchInfo.set(w.q, c);
+      if (c && was != null && c.now < was) cheaper.push(`${w.q}: ${formatTL(was)} → ${formatTL(c.now)}`);
+      renderWatch();
+    }
+    toast(cheaper.length ? `Cheaper now: ${cheaper.join(' · ')}` : 'Checked. None of your watched searches got cheaper.');
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    state.checking = false;
+    btn.disabled = false;
+    btn.textContent = 'Check prices';
+  }
+}
+
+/** On load: read every watched series (no store is opened) and point out drops since the last visit. */
+async function loadWatch() {
+  const seen = store.get('pcprice.watchSeen', 0);
+  await Promise.all(state.watch.map(refreshWatchInfo));
+  const drops = state.watch.filter((w) => {
+    const c = state.watchInfo.get(w.q);
+    return c?.before && c.diff < 0 && c.t > seen;
+  });
+  if (seen && drops.length) toast(`Cheaper since your last visit: ${drops.map((w) => `${w.q} ${formatTL(state.watchInfo.get(w.q).now)}`).join(' · ')}`);
+  store.set('pcprice.watchSeen', Date.now());
+}
+
 /* ---------- chrome: recent searches, theme, keyboard ---------- */
 
 function renderRecent() {
@@ -845,6 +994,22 @@ async function init() {
     }
   }).observe($('#hchart'));
 
+  $('#hWatch').onclick = toggleWatch;
+  $('#checkWatch').onclick = checkWatched;
+  $('#watchList').onclick = (e) => {
+    const open = e.target.closest('[data-wq]');
+    const rm = e.target.closest('[data-wrm]');
+    if (open) search(state.watch[Number(open.dataset.wq)].q, false);
+    if (rm) {
+      const w = state.watch[Number(rm.dataset.wrm)];
+      state.watch = state.watch.filter((x) => x !== w);
+      state.watchInfo.delete(w.q);
+      saveWatch();
+    }
+  };
+  // A thumbnail the store's CDN refuses: drop it rather than show a broken image.
+  $('#table tbody').addEventListener('error', (e) => e.target.matches?.('img.thumb') && e.target.replaceWith(Object.assign(document.createElement('span'), { className: 'thumb none' })), true);
+
   $('#recheck').onclick = recheckBuild;
   $('#copyBuild').onclick = copyBuild;
   const modes = ['auto', 'light', 'dark'];
@@ -860,6 +1025,8 @@ async function init() {
   render();
   renderBuild();
   renderRecent();
+  renderWatch();
+  loadWatch();
   const q = new URLSearchParams(location.search).get('q');
   if (q) search(q, false);
 }

@@ -6,11 +6,18 @@
 //   - per offer (by URL): a point whenever its price changes, plus one a day as a
 //     "still listed" heartbeat, and the time it was last seen;
 //   - per query and store selection: the lowest and median price of the offers that
-//     count, at most one point per half hour. A different set of stores is a
-//     different series, because switching a store off changes the lowest price.
+//     count (real stores only: Akakçe/Epey rows are summaries of other stores), at
+//     most one point per half hour. A different set of stores is a different
+//     series, because switching a store off changes the lowest price. A point also
+//     names the stores that failed, since a missing store can fake a price jump,
+//     and how many offers each store that answered returned.
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { median } from './text.js';
+
+/** Where the app and the CLI keep the history: .cache/ in the project, which git ignores. */
+export const HISTORY_FILE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.cache', 'history.json');
 
 const HOUR = 3600_000;
 const DAY = 24 * HOUR;
@@ -51,8 +58,8 @@ export function createHistory({ file, now = Date.now, maxPoints = 400, keepMs = 
     }
   }
 
-  function recordQuery(query, scope, offers, t) {
-    const counted = offers.filter((o) => !o.flag);
+  function recordQuery(query, scope, offers, results, t) {
+    const counted = offers.filter((o) => !o.flag && o.kind !== 'aggregator');
     if (!counted.length) return;
     const prices = counted.map((o) => o.price);
     const cheapest = counted.reduce((a, b) => (b.price < a.price ? b : a));
@@ -65,6 +72,13 @@ export function createHistory({ file, now = Date.now, maxPoints = 400, keepMs = 
       n: prices.length,
       best: { site: cheapest.site, title: cheapest.title },
     };
+    if (results) {
+      const failed = results.filter((r) => r.status !== 'ok').map((r) => r.site);
+      if (failed.length) point.failed = failed;
+      point.sites = Object.fromEntries(
+        results.filter((r) => r.status === 'ok').map((r) => [r.site, offers.filter((o) => o.site === r.site).length]),
+      );
+    }
     if (series.length && t - series.at(-1).t < QUERY_GAP_MS) series[series.length - 1] = point;
     else series.push(point);
     if (series.length > maxPoints) series.splice(0, series.length - maxPoints);
@@ -82,15 +96,29 @@ export function createHistory({ file, now = Date.now, maxPoints = 400, keepMs = 
   }
 
   return {
-    /** Add what a search found. `scope` names the stores searched ('all', or their ids joined by commas). */
-    record(query, offers, { scope = 'all' } = {}) {
+    /**
+     * Add what a search found. `scope` names the stores searched ('all', or their
+     * ids joined by commas); `results` is each store's { site, status }.
+     * `queryPoint: false` (a page-2 search) updates the offers only.
+     */
+    record(query, offers, { scope = 'all', results = null, queryPoint = true } = {}) {
       const t = now();
       recordOffers(offers, t);
-      recordQuery(query, scope, offers, t);
+      if (queryPoint) recordQuery(query, scope, offers, results, t);
       prune(t);
     },
     query: (query, scope = 'all') => data.queries[seriesKey(query, scope)] ?? [],
     offer: (url) => data.offers[url] ?? null,
+    /** The latest known number of offers each store returned for this query. */
+    siteCounts(query, scope = 'all') {
+      return Object.assign({}, ...(data.queries[seriesKey(query, scope)] ?? []).map((p) => p.sites ?? {}));
+    },
+    /** The last price this offer had that differs from `price`, as { price, t }, or null. */
+    priceBefore(url, price) {
+      const pts = data.offers[url]?.points ?? [];
+      for (let i = pts.length - 1; i >= 0; i--) if (pts[i][1] !== price) return { price: pts[i][1], t: pts[i][0] };
+      return null;
+    },
     /** Write to disk; writes queue up so two searches never interleave. */
     save() {
       const json = JSON.stringify(data);

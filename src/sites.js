@@ -8,6 +8,8 @@
 // `price` may be a number or the store's printed text; src/text.js parses it.
 // A site with `details` returns items without prices; the matching ones are
 // then opened one by one and priced by `details.extract`.
+// `page(query, n)` is result page n, for a deep search; only stores where page 2
+// was checked to return new results have one (2026-11-16).
 
 /** Generic card reader driven by CSS selectors; `cfg` may be a list of layouts. */
 export function extractCards(cfg) {
@@ -27,8 +29,15 @@ export function extractCards(cfg) {
     const title = clean((cfg.titleAttr && tEl?.getAttribute(cfg.titleAttr)) || tEl?.textContent);
     const prices = [...card.querySelectorAll(cfg.price)].map((e) => clean(e.textContent)).filter((t) => /\d/.test(t));
     const lEl = one(card, cfg.link ?? 'a[href]');
-    const img = card.querySelector('img');
-    const image = img && (img.getAttribute('data-src') || img.getAttribute('src'));
+    // The product photo: an image named like a product, else any image that is
+    // not an icon, a lazy-load placeholder, a brand logo or a sticker/badge; else a
+    // <source> srcset. No photo beats a wrong one.
+    const src = (el) => el.getAttribute('data-src') || el.getAttribute('src') || (el.getAttribute('srcset') || '').trim().split(/\s+/)[0];
+    const junk = (u) =>
+      !u || u.startsWith('data:') || /\.svg(\?|$)|placeholder|\/icons?\/|\/ikonlar?\/|\/marka\/|sticker|stamp|badge|rozet|\/marketing\//i.test(u);
+    const imgs = [...card.querySelectorAll('img')];
+    const pic = imgs.find((i) => i.getAttribute('alt') && !junk(src(i))) ?? imgs.find((i) => !junk(src(i))) ?? card.querySelector('source[srcset]');
+    const image = pic ? src(pic) || null : null;
     const offers = cfg.offers ? clean(one(card, cfg.offers)?.textContent) : undefined;
     if (!title || !prices.length) continue;
     // Card text plus badge images' alt/title: where stores print "Peşin Fiyatına 9 Taksit".
@@ -203,6 +212,7 @@ export const SITES = [
     name: 'Akakçe',
     kind: 'aggregator',
     url: (q) => `https://www.akakce.com/arama/?q=${enc(q)}`,
+    page: (q, n) => `https://www.akakce.com/arama/?q=${enc(q)}&p=${n}`,
     waitFor: 'astro-island[props]',
     extract: extractAkakce,
   },
@@ -225,6 +235,7 @@ export const SITES = [
     name: 'Trendyol',
     kind: 'store',
     url: (q) => `https://www.trendyol.com/sr?q=${enc(q)}`,
+    page: (q, n) => `https://www.trendyol.com/sr?q=${enc(q)}&pi=${n}`,
     waitFor: 'a.product-card',
     scriptBadges: scriptInstallments,
     extract: extractCards,
@@ -241,6 +252,7 @@ export const SITES = [
     name: 'Hepsiburada',
     kind: 'store',
     url: (q) => `https://www.hepsiburada.com/ara?q=${enc(q)}`,
+    page: (q, n) => `https://www.hepsiburada.com/ara?q=${enc(q)}&sayfa=${n}`,
     waitFor: 'article[class*="productCard-module_article"]',
     extract: extractCards,
     cfg: {
@@ -255,6 +267,7 @@ export const SITES = [
     name: 'n11',
     kind: 'store',
     url: (q) => `https://www.n11.com/arama?q=${enc(q)}`,
+    page: (q, n) => `https://www.n11.com/arama?q=${enc(q)}&pg=${n}`,
     waitFor: 'script[type="application/ld+json"]',
     scriptBadges: scriptInstallments,
     extract: extractJsonLd,
@@ -264,6 +277,7 @@ export const SITES = [
     name: 'Amazon TR',
     kind: 'store',
     url: (q) => `https://www.amazon.com.tr/s?k=${enc(q)}`,
+    page: (q, n) => `https://www.amazon.com.tr/s?k=${enc(q)}&page=${n}`,
     waitFor: 'div[data-component-type="s-search-result"]',
     extract: extractCards,
     cfg: {
@@ -289,6 +303,7 @@ export const SITES = [
     name: 'Vatan Bilgisayar',
     kind: 'store',
     url: (q) => `https://www.vatanbilgisayar.com/arama/${enc(q)}/`,
+    page: (q, n) => `https://www.vatanbilgisayar.com/arama/${enc(q)}/?page=${n}`,
     waitFor: '.product-list',
     extract: extractCards,
     cfg: {
@@ -303,6 +318,7 @@ export const SITES = [
     name: 'MediaMarkt',
     kind: 'store',
     url: (q) => `https://www.mediamarkt.com.tr/tr/search.html?query=${enc(q)}`,
+    page: (q, n) => `https://www.mediamarkt.com.tr/tr/search.html?query=${enc(q)}&page=${n}`,
     waitFor: 'script[type="application/ld+json"]',
     extract: extractJsonLd,
   },
@@ -311,6 +327,7 @@ export const SITES = [
     name: 'Sinerji',
     kind: 'store',
     url: (q) => `https://www.sinerji.gen.tr/${enc(slug(q))}-s`,
+    page: (q, n) => `https://www.sinerji.gen.tr/${enc(slug(q))}-s?px=${n}`,
     waitFor: 'article.product',
     extract: extractCards,
     cfg: { card: 'article.product', title: '.title a', price: '.price', link: '.title a' },
@@ -320,6 +337,7 @@ export const SITES = [
     name: 'PttAVM',
     kind: 'store',
     url: (q) => `https://www.pttavm.com/arama?q=${enc(q)}`,
+    page: (q, n) => `https://www.pttavm.com/arama?q=${enc(q)}&page=${n}`,
     waitFor: 'script[type="application/ld+json"]',
     extract: extractJsonLd,
   },
@@ -328,6 +346,7 @@ export const SITES = [
     name: 'Pazarama',
     kind: 'store',
     url: (q) => `https://www.pazarama.com/arama?q=${enc(q)}`,
+    page: (q, n) => `https://www.pazarama.com/arama?q=${enc(q)}&sayfa=${n}`,
     waitFor: '.product-card__price',
     extract: extractCards,
     // Two prices per card: list price, then the lower "Sepette" price (parsePrice keeps the lowest).
@@ -384,6 +403,7 @@ export const SITES = [
     name: 'Teknobiyotik',
     kind: 'store',
     url: (q) => `https://www.teknobiyotik.com/catalogsearch/result/?q=${enc(q)}`,
+    page: (q, n) => `https://www.teknobiyotik.com/catalogsearch/result/?q=${enc(q)}&p=${n}`,
     waitFor: '.product-shop',
     extract: extractCards,
     // "Özel Fiyat" when discounted, else the regular price; never the "Havale" or struck-through one.

@@ -128,6 +128,73 @@ test('a series is capped at maxPoints, newest kept', () => {
   assert.equal(h.query('q').at(-1).min, 111);
 });
 
+test('aggregator rows (Akakçe, Epey) do not count towards the lowest or median price', () => {
+  const h = createHistory({ file: tmpFile(), now: clock() });
+  h.record('q', [
+    offer(50, { url: 'https://agg.test/1', site: 'akakce', kind: 'aggregator' }),
+    offer(100, { url: 'https://a.test/1', kind: 'store' }),
+    offer(300, { url: 'https://a.test/2', kind: 'store' }),
+  ]);
+  const [pt] = h.query('q');
+  assert.deepEqual({ min: pt.min, median: pt.median, n: pt.n }, { min: 100, median: 200, n: 2 });
+  assert.ok(h.offer('https://agg.test/1'), 'the aggregator row still has its own offer history');
+});
+
+test('a query point names the stores that failed, and counts offers per store that answered', () => {
+  const h = createHistory({ file: tmpFile(), now: clock() });
+  const results = [
+    { site: 'a', status: 'ok' },
+    { site: 'b', status: 'blocked' },
+    { site: 'c', status: 'error' },
+    { site: 'd', status: 'ok' },
+  ];
+  h.record('q', [offer(100, { url: 'https://a.test/1' }), offer(120, { url: 'https://a.test/2' })], { results });
+  const [pt] = h.query('q');
+  assert.deepEqual(pt.failed, ['b', 'c']);
+  assert.deepEqual(pt.sites, { a: 2, d: 0 });
+});
+
+test('a page-2 search updates each offer but adds no query point (it reads more, so its low is not comparable)', () => {
+  const h = createHistory({ file: tmpFile(), now: clock() });
+  h.record('q', [offer(100)], { queryPoint: false });
+  assert.deepEqual(h.query('q'), []);
+  assert.equal(h.offer('https://a.test/p1').points.length, 1);
+});
+
+test('a point where every store answered carries no failed list', () => {
+  const h = createHistory({ file: tmpFile(), now: clock() });
+  h.record('q', [offer(100)], { results: [{ site: 'a', status: 'ok' }] });
+  assert.equal(h.query('q')[0].failed, undefined);
+});
+
+test('siteCounts gives the latest known offer count per store for a query', () => {
+  const now = clock();
+  const h = createHistory({ file: tmpFile(), now });
+  h.record('q', [offer(100, { url: 'https://a.test/1' })], { results: [{ site: 'a', status: 'ok' }, { site: 'b', status: 'ok' }] });
+  now.advance(H);
+  h.record('q', [offer(100, { url: 'https://b.test/1', site: 'b' })], {
+    results: [{ site: 'a', status: 'error' }, { site: 'b', status: 'ok' }],
+  });
+  assert.deepEqual(h.siteCounts('q'), { a: 1, b: 1 }, 'a failed store keeps its last known count');
+  assert.deepEqual(h.siteCounts('never searched'), {});
+});
+
+test('priceBefore gives the last different price an offer had, and when', () => {
+  const now = clock();
+  const h = createHistory({ file: tmpFile(), now });
+  h.record('q', [offer(100)]);
+  now.advance(2 * H);
+  h.record('q', [offer(90)]);
+  assert.deepEqual(h.priceBefore('https://a.test/p1', 90), { price: 100, t: T0 });
+  assert.deepEqual(h.priceBefore('https://a.test/p1', 100), { price: 90, t: T0 + 2 * H }, 'back up to 100 from 90');
+  now.advance(30 * H);
+  h.record('q', [offer(90)]);
+  assert.deepEqual(h.priceBefore('https://a.test/p1', 90), { price: 100, t: T0 }, 'same-price heartbeats are skipped');
+  assert.equal(h.priceBefore('https://none.test', 90), null);
+  h.record('flat', [offer(70, { url: 'https://f.test/1' })]);
+  assert.equal(h.priceBefore('https://f.test/1', 70), null, 'never changed');
+});
+
 test('each query point names the cheapest offer that counted', () => {
   const h = createHistory({ file: tmpFile(), now: clock() });
   h.record('q', [

@@ -10,6 +10,7 @@
 import { chromium } from 'playwright-core';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { mapLimit } from './pool.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PROFILE = process.env.PCPRICE_PROFILE || path.join(ROOT, '.browser-profile');
@@ -84,13 +85,19 @@ async function waitOutChallenge(page, polls = 15) {
 
 /**
  * Open a store's search page, wait out any challenge and for the results to
- * render, then run the site's in-page extractor.
- * Returns { status: 'ok' | 'blocked' | 'error', items, title, ms, error? }.
+ * render, then run the site's in-page extractor. With `pages` > 1 and a store
+ * that has a `page(query, n)` URL, the next result pages are read too.
+ * Aborting `signal` closes the tab. Returns
+ * { status: 'ok' | 'blocked' | 'error' | 'cancelled', items, title, ms, error? }.
  */
-export async function scrape(site, query, { timeoutMs = 45000, keep = () => true } = {}) {
+export async function scrape(site, query, { timeoutMs = 45000, keep = () => true, pages = 1, signal } = {}) {
   const started = Date.now();
+  const cancelled = () => ({ status: 'cancelled', items: [], ms: Date.now() - started });
+  if (signal?.aborted) return cancelled();
   const ctx = await getContext();
   const page = await ctx.newPage();
+  const onAbort = () => page.close().catch(() => {});
+  signal?.addEventListener('abort', onAbort, { once: true });
   try {
     await page.goto(site.url(query), { waitUntil: 'domcontentloaded', timeout: timeoutMs });
     const title = await waitOutChallenge(page);
@@ -98,14 +105,20 @@ export async function scrape(site, query, { timeoutMs = 45000, keep = () => true
       // An interactive check we must not click for the user: see src/unlock.js.
       return { status: 'blocked', items: [], title, error: 'Needs a manual check: run `npm run unlock`', ms: Date.now() - started };
     }
-    // No match within the wait usually means "no results"; extract anyway.
-    await page.waitForSelector(site.waitFor, { state: 'attached', timeout: 15000 }).catch(() => {});
-    await page.waitForTimeout(800);
-    const items = await page.evaluate(site.extract, site.cfg ?? null);
-    if (site.scriptBadges && items.length) {
-      const badges = await page.evaluate(site.scriptBadges, items.map((i) => i.url));
-      items.forEach((item, i) => (item.installmentText = [item.text, badges[i]].filter(Boolean).join(' ')));
+    const items = await readResults(page, site);
+    for (let n = 2; n <= pages && site.page && items.length; n++) {
+      // A later page that fails or is empty only means fewer results, never a failed store.
+      try {
+        await page.goto(site.page(query, n), { waitUntil: 'domcontentloaded', timeout: timeoutMs });
+        if (CHALLENGE.test(await waitOutChallenge(page, 6))) break;
+        const more = await readResults(page, site);
+        if (!more.length) break;
+        items.push(...more);
+      } catch {
+        break;
+      }
     }
+    if (signal?.aborted) return cancelled();
     const blocked = site.details ? await priceFromDetailPages(ctx, site, items, keep) : 0;
     if (blocked) {
       return {
@@ -118,34 +131,47 @@ export async function scrape(site, query, { timeoutMs = 45000, keep = () => true
     }
     return { status: 'ok', items, title, ms: Date.now() - started };
   } catch (e) {
+    if (signal?.aborted) return cancelled();
     return { status: 'error', items: [], error: e.message.split('\n')[0], ms: Date.now() - started };
   } finally {
+    signal?.removeEventListener('abort', onAbort);
     await page.close().catch(() => {});
   }
 }
 
-/** Fill in prices for unpriced items the caller wants, from their own pages. */
+/** Wait for a result page to render, run the store's extractor, and read its script-only badges. */
+async function readResults(page, site) {
+  // No match within the wait usually means "no results"; extract anyway.
+  await page.waitForSelector(site.waitFor, { state: 'attached', timeout: 15000 }).catch(() => {});
+  await page.waitForTimeout(800);
+  const items = await page.evaluate(site.extract, site.cfg ?? null);
+  if (site.scriptBadges && items.length) {
+    const badges = await page.evaluate(site.scriptBadges, items.map((i) => i.url));
+    items.forEach((item, i) => (item.installmentText = [item.text, badges[i]].filter(Boolean).join(' ')));
+  }
+  return items;
+}
+
+/** Fill in prices for unpriced items the caller wants, from their own pages, 3 at a time. */
 async function priceFromDetailPages(ctx, site, items, keep) {
   const todo = items.filter((i) => i.price == null && i.url && keep(i.title)).slice(0, site.details.limit);
   let blocked = 0;
-  await Promise.all(
-    todo.map(async (item) => {
-      const page = await ctx.newPage();
-      try {
-        await page.goto(item.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-        if (CHALLENGE.test(await waitOutChallenge(page, 6))) {
-          blocked++;
-          return;
-        }
-        await page.waitForLoadState('domcontentloaded');
-        const { price } = await page.evaluate(site.details.extract);
-        item.price = price;
-      } catch {
-        /* leave unpriced: the offer is dropped */
-      } finally {
-        await page.close().catch(() => {});
+  await mapLimit(todo, 3, async (item) => {
+    const page = await ctx.newPage();
+    try {
+      await page.goto(item.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      if (CHALLENGE.test(await waitOutChallenge(page, 6))) {
+        blocked++;
+        return;
       }
-    }),
-  );
+      await page.waitForLoadState('domcontentloaded');
+      const { price } = await page.evaluate(site.details.extract);
+      item.price = price;
+    } catch {
+      /* leave unpriced: the offer is dropped */
+    } finally {
+      await page.close().catch(() => {});
+    }
+  });
   return blocked;
 }

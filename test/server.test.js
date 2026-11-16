@@ -59,6 +59,10 @@ test('search streams one event per store and then done', async () => {
   assert.match(body, /event: done\n/);
 });
 
+test('the shared browser modules are served', async () => {
+  for (const p of ['/lib/text.js', '/lib/chart.js', '/lib/watch.js']) assert.equal((await get(p)).status, 200, p);
+});
+
 test('a search without q is a 400 and unknown paths are 404', async () => {
   assert.equal((await get('/api/search')).status, 400);
   assert.equal((await get('/nope')).status, 404);
@@ -71,6 +75,8 @@ test('a finished search is recorded, and /api/history serves the series back', a
     record: (q, offers, opts) => recorded.push({ q, offers, opts }),
     query: (q, scope) => (asked.push([q.toLowerCase(), scope]), q.toLowerCase() === 'rtx 4060' ? [{ t: 1, min: 1, median: 1, n: 1 }] : []),
     offer: (url) => (url === 'https://x.test/p' ? { site: 'x', title: 'part', seen: 2, points: [[1, 1]] } : null),
+    siteCounts: () => ({}),
+    priceBefore: () => null,
     save: async () => {},
   };
   const s = createServer({ searchAll: fakeSearch, history });
@@ -100,7 +106,100 @@ test('a finished search is recorded, and /api/history serves the series back', a
     assert.deepEqual(o.points, [[1, 1]]);
     assert.equal((await call('/api/history?url=https%3A%2F%2Fnone.test')).status, 404);
     assert.equal((await call('/api/history')).status, 400);
+    assert.deepEqual(recorded[0].opts.results.map((r) => [r.site, r.status]), [['x', 'ok']], 'each store result reaches the history');
+    assert.equal(recorded[0].opts.queryPoint, true);
+    await call('/api/search?q=rtx+4060&deep=1');
+    assert.equal(recorded.at(-1).opts.queryPoint, false, 'a page-2 search adds no point to the query line');
   } finally {
     await new Promise((resolve) => s.close(resolve));
+  }
+});
+
+/** Start a server for one test and give back a raw GET that resolves with the body. */
+async function serve(opts) {
+  const s = createServer(opts);
+  await new Promise((resolve) => s.listen(0, '127.0.0.1', resolve));
+  const p = s.address().port;
+  const call = (path) =>
+    new Promise((resolve, reject) => {
+      http.get({ host: '127.0.0.1', port: p, path, headers: { host: `127.0.0.1:${p}` } }, (res) => {
+        let body = '';
+        res.on('data', (c) => (body += c));
+        res.on('end', () => resolve(body));
+      }).on('error', reject);
+    });
+  return { s, p, call, close: () => new Promise((resolve) => s.close(resolve)) };
+}
+
+const events = (body, name) =>
+  [...body.matchAll(new RegExp(`event: ${name}\\ndata: (.*)\\n`, 'g'))].map((m) => JSON.parse(m[1]));
+
+test('closing the page cancels the search and nothing partial is recorded', async () => {
+  let signal;
+  const recorded = [];
+  const slowSearch = (q, opts) => {
+    signal = opts.signal;
+    return new Promise((resolve) => opts.signal.addEventListener('abort', () => resolve({ query: q, results: [], offers: [] })));
+  };
+  const history = { record: (...a) => recorded.push(a), save: async () => {}, siteCounts: () => ({}), priceBefore: () => null };
+  const { p, close } = await serve({ searchAll: slowSearch, history });
+  try {
+    await new Promise((resolve) => {
+      const req = http.get({ host: '127.0.0.1', port: p, path: '/api/search?q=rtx', headers: { host: `127.0.0.1:${p}` } }, () => {
+        // The stream is open (headers arrive before any store finishes): now leave.
+        req.destroy();
+        resolve();
+      });
+      req.on('error', () => {});
+    });
+    for (let i = 0; i < 50 && !signal?.aborted; i++) await new Promise((r) => setTimeout(r, 10));
+    assert.equal(signal?.aborted, true, 'the search was told to stop');
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(recorded.length, 0);
+  } finally {
+    await close();
+  }
+});
+
+test('a store that finds nothing where it used to find offers gets a warning', async () => {
+  const search = async (q, { onSite }) => {
+    const rs = [
+      { site: 'a', siteName: 'A', status: 'ok', found: 0, offers: [] },
+      { site: 'b', siteName: 'B', status: 'ok', found: 0, offers: [] },
+    ];
+    rs.forEach((r) => onSite(r));
+    return { query: q, results: rs, offers: [] };
+  };
+  const history = { record() {}, save: async () => {}, siteCounts: () => ({ a: 7, b: 0 }), priceBefore: () => null };
+  const { call, close } = await serve({ searchAll: search, history });
+  try {
+    const [a, b] = events(await call('/api/search?q=rtx'), 'site');
+    assert.match(a.warning, /7 offers/);
+    assert.equal(b.warning, undefined, 'it found nothing before either');
+  } finally {
+    await close();
+  }
+});
+
+test('offers carry their previous price when it changed', async () => {
+  const o = { site: 'a', title: 't', price: 90, url: 'https://a.test/1' };
+  const search = async (q, { onSite }) => {
+    const r = { site: 'a', siteName: 'A', status: 'ok', found: 1, offers: [o] };
+    onSite(r);
+    return { query: q, results: [r], offers: [o] };
+  };
+  const history = {
+    record() {},
+    save: async () => {},
+    siteCounts: () => ({}),
+    priceBefore: (url, price) => (url === o.url && price === 90 ? { price: 100, t: 5 } : null),
+  };
+  const { call, close } = await serve({ searchAll: search, history });
+  try {
+    const body = await call('/api/search?q=rtx');
+    assert.deepEqual(events(body, 'site')[0].offers[0].prev, { price: 100, t: 5 });
+    assert.deepEqual(events(body, 'done')[0].offers[0].prev, { price: 100, t: 5 });
+  } finally {
+    await close();
   }
 });
