@@ -25,3 +25,16 @@ test('toOffers drops items whose link is not http(s)', () => {
   const { offers } = toOffers(site, [{ title: 'MSI RTX 4060', price: '17.999 TL', url: 'javascript:alert(1)' }], q);
   assert.equal(offers.length, 0);
 });
+
+test('toOffers drops sold-out listings but keeps ones with unknown stock', () => {
+  const { offers } = toOffers(
+    site,
+    [
+      { title: 'MSI RTX 4060 Ventus', price: '17.999 TL', url: 'https://s.test/a', inStock: false },
+      { title: 'Asus RTX 4060 Dual', price: '18.499 TL', url: 'https://s.test/b', inStock: true },
+      { title: 'Gigabyte RTX 4060 Eagle', price: '18.999 TL', url: 'https://s.test/c' },
+    ],
+    q,
+  );
+  assert.deepEqual(offers.map((o) => o.url), ['https://s.test/b', 'https://s.test/c']);
+});

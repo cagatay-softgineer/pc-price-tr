@@ -3,6 +3,7 @@
 // function here must be self-contained: no closures over module scope.
 //
 // Extractor result items: { title, price, url, image?, offers?, inStock?, text? }
+// `inStock: false` drops the item; leave it undefined when the page does not say.
 // `text` is the card's visible text and badge alt/title, read for instalment badges.
 // `price` may be a number or the store's printed text; src/text.js parses it.
 // A site with `details` returns items without prices; the matching ones are
@@ -32,13 +33,16 @@ export function extractCards(cfg) {
     if (!title || !prices.length) continue;
     // Card text plus badge images' alt/title: where stores print "Peşin Fiyatına 9 Taksit".
     const badges = [...card.querySelectorAll('img[alt], [title]')].map((e) => e.getAttribute('alt') || e.getAttribute('title'));
+    const cardText = clean(`${card.textContent} ${badges.join(' ')}`);
     out.push({
       title,
       price: cfg.lastPrice ? prices[prices.length - 1] : prices[0],
       url: abs(lEl?.getAttribute('href')),
       image: image && !image.startsWith('data:') ? abs(image) : null,
       offers,
-      text: clean(`${card.textContent} ${badges.join(' ')}`).slice(0, 600),
+      text: cardText.slice(0, 600),
+      // Stores keep listing sold-out products, often still with a price.
+      inStock: !/tükendi|tukendi|stokta yok|stok yok|gelince haber ver/.test(cardText.toLocaleLowerCase('tr')),
     });
   }
   return out;
@@ -61,6 +65,7 @@ export function extractJsonLd() {
           price: String(price),
           url: node.url || offer.url || null,
           image: typeof img === 'string' ? img : img?.url || null,
+          inStock: offer.availability ? !/outofstock|soldout|discontinued/i.test(String(offer.availability)) : undefined,
         });
       }
     }
@@ -319,6 +324,89 @@ export const SITES = [
     extract: extractCards,
     cfg: { card: 'article.product', title: '.title a', price: '.price', link: '.title a' },
   },
+  {
+    id: 'pttavm',
+    name: 'PttAVM',
+    kind: 'store',
+    url: (q) => `https://www.pttavm.com/arama?q=${enc(q)}`,
+    waitFor: 'script[type="application/ld+json"]',
+    extract: extractJsonLd,
+  },
+  {
+    id: 'pazarama',
+    name: 'Pazarama',
+    kind: 'store',
+    url: (q) => `https://www.pazarama.com/arama?q=${enc(q)}`,
+    waitFor: '.product-card__price',
+    extract: extractCards,
+    // Two prices per card: list price, then the lower "Sepette" price (parsePrice keeps the lowest).
+    cfg: { card: 'a[href*="-p-"]:has(.product-card__price)', title: 'h2', price: '.product-card__price', link: ':scope' },
+  },
+  {
+    id: 'tebilon',
+    name: 'Tebilon',
+    kind: 'store',
+    url: (q) => `https://www.tebilon.com/arama/?a=${enc(q)}`,
+    waitFor: '.showcase__productBox',
+    extract: extractCards,
+    cfg: { card: '.showcase__productBox', title: '.showcase__title a', price: '.newPrice', link: '.showcase__title a' },
+  },
+  {
+    id: 'eksen',
+    name: 'Eksen Bilgisayar',
+    kind: 'store',
+    url: (q) => `https://www.eksenbilgisayar.com/arama?urunAra=${enc(q)}`,
+    waitFor: '.item-product-info',
+    extract: extractCards,
+    cfg: { card: '.item-product-info', title: '.item-product-name a', titleAttr: 'title', price: '.item-product-priceSale', link: '.item-product-name a' },
+  },
+  {
+    id: 'pckolik',
+    name: 'PcKolik',
+    kind: 'store',
+    url: (q) => `https://pckolik.com.tr/arama?q=${enc(q)}`,
+    waitFor: 'h3',
+    extract: extractCards,
+    // Sold-out cards print no price, so they are skipped.
+    cfg: { card: 'div.group.relative.h-full', title: 'h3', price: '.price-now', link: 'a[href^="/urun/"]' },
+  },
+  {
+    id: 'nova',
+    name: 'Nova Bilgisayar',
+    kind: 'store',
+    url: (q) => `https://www.novabilgisayar.com/${enc(slug(q))}-arama-sonuclari`,
+    waitFor: '.product-body',
+    extract: extractCards,
+    cfg: { card: '.product-body', title: 'h3.product-title a', price: '.price-val', link: 'h3.product-title a' },
+  },
+  {
+    id: 'gelbura',
+    name: 'Gelbura',
+    kind: 'store',
+    url: (q) => `https://www.gelbura.com/ara?q=${enc(q)}`,
+    waitFor: '.product-content',
+    extract: extractCards,
+    cfg: { card: '.product-content', title: 'a.product-title', price: '.regular-price, .price', link: 'a.product-title' },
+  },
+  {
+    id: 'teknobiyotik',
+    name: 'Teknobiyotik',
+    kind: 'store',
+    url: (q) => `https://www.teknobiyotik.com/catalogsearch/result/?q=${enc(q)}`,
+    waitFor: '.product-shop',
+    extract: extractCards,
+    // "Özel Fiyat" when discounted, else the regular price; never the "Havale" or struck-through one.
+    cfg: { card: '.product-shop', title: '.product-name a', titleAttr: 'title', price: '.special-price .price, .regular-price .price', link: '.product-name a' },
+  },
+  {
+    id: 'vizyon',
+    name: 'Vizyon Bilgisayar',
+    kind: 'store',
+    url: (q) => `https://www.vizyonbilgisayar.com/arama?k=${enc(q)}`,
+    waitFor: '.card-product',
+    extract: extractCards,
+    cfg: { card: '.card-product', title: '.title', price: '.sale-price', link: 'a.c-p-i-link' },
+  },
 ];
 
 /**
@@ -329,4 +417,12 @@ export const UNSUPPORTED = [
   { id: 'cimri', name: 'Cimri', reason: 'Cloudflare blocks automated Chrome ("Attention Required")' },
   { id: 'teknosa', name: 'Teknosa', reason: 'Cloudflare blocks automated Chrome ("Attention Required")' },
   { id: 'gaming', name: 'Gaming.gen.tr', reason: 'Search redirects to a single product page' },
+  { id: 'gamegaraj', name: 'GameGaraj', reason: 'Search results appear in an in-page overlay, with no result-page URL to open' },
+  { id: 'inventus', name: 'İnventus', reason: 'Search is a form post-back, with no result-page URL to open' },
+  { id: 'gencergaming', name: 'Gençer Gaming', reason: 'Showed "Mağaza Güncelleniyor" (HTTP 503) when checked' },
+  { id: 'qp', name: 'QP Bilişim', reason: 'qp.com.tr showed "Yenileniyoruz" (being rebuilt) when checked; the domain is unconfirmed' },
+  { id: 'bilisimport', name: 'Bilisimport', reason: 'Its result page rendered no product cards for "rtx 4060" or "ssd"' },
+  { id: 'artsistem', name: 'Art Sistem', reason: 'B2B distributor: prices are shown only after a B2B login' },
+  { id: 'ciceksepeti', name: 'Çiçeksepeti', reason: 'Result cards have no stable class names to read' },
+  { id: 'sahibinden', name: 'Sahibinden', reason: 'Classifieds behind a login/bot wall; not bypassed' },
 ];

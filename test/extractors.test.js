@@ -3,7 +3,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright-core';
-import { extractCards, scriptInstallments } from '../src/sites.js';
+import { extractCards, extractJsonLd, scriptInstallments } from '../src/sites.js';
 
 let browser;
 before(async () => {
@@ -43,6 +43,17 @@ test('extractCards keeps the card text and badge image alt/title for instalment 
   assert.ok(items[1].text.length < 200, 'text stays short');
 });
 
+test('extractCards marks cards that print a sold-out notice as out of stock', async (t) => {
+  if (!browser) return t.skip('no Chrome or Edge installed');
+  const items = await run(
+    `<div class="c"><a class="t" href="/p/1">MSI RTX 4060</a><span class="p">29.380 TL</span><a>GELİNCE HABER VER</a></div>
+     <div class="c"><a class="t" href="/p/2">Asus RTX 4060</a><span class="p">18.499 TL</span><a>Sepete Ekle</a></div>
+     <div class="c"><a class="t" href="/p/3">Gigabyte RTX 4060</a><span class="p">19.999 TL</span><span>Tükendi</span></div>`,
+    { card: '.c', title: '.t', price: '.p', link: '.t' },
+  );
+  assert.deepEqual(items.map((i) => i.inStock), [false, true, false]);
+});
+
 test('scriptInstallments finds each product\'s badge in the page\'s inline JSON', async (t) => {
   if (!browser) return t.skip('no Chrome or Edge installed');
   const page = await browser.newPage();
@@ -65,6 +76,25 @@ test('scriptInstallments finds each product\'s badge in the page\'s inline JSON'
     assert.match(out[2], /PEŞİN FİYATINA 3 TAKSIT/);
     assert.equal(out[3], '');
     assert.equal(out[4], '');
+  } finally {
+    await page.close();
+  }
+});
+
+test('extractJsonLd reads schema.org availability into inStock', async (t) => {
+  if (!browser) return t.skip('no Chrome or Edge installed');
+  const page = await browser.newPage();
+  try {
+    const product = (name, availability) => ({ '@type': 'Product', name, offers: { '@type': 'Offer', price: '1000', availability } });
+    const ld = { '@type': 'ItemList', itemListElement: [
+      { item: product('A', 'https://schema.org/InStock') },
+      { item: product('B', 'https://schema.org/OutOfStock') },
+      { item: product('C', 'SoldOut') },
+      { item: product('D') },
+    ] };
+    await page.setContent(`<body><script type="application/ld+json">${JSON.stringify(ld)}</script></body>`);
+    const items = await page.evaluate(extractJsonLd);
+    assert.deepEqual(items.map((i) => i.inStock), [true, false, false, undefined]);
   } finally {
     await page.close();
   }

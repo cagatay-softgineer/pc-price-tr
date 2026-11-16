@@ -26,7 +26,7 @@ export function toOffers(site, rawItems, parsed) {
   for (const item of rawItems) {
     const price = parsePrice(item.price);
     const url = item.url && cleanUrl(item.url);
-    if (!price || !url || seen.has(url)) continue;
+    if (!price || !url || item.inStock === false || seen.has(url)) continue;
     seen.add(url);
     const title = cleanTitle(item.title);
     if (!matches(title, parsed)) {

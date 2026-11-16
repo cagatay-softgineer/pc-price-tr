@@ -28,6 +28,15 @@ const sites = {
   mediamarkt: `https://www.mediamarkt.com.tr/tr/search.html?query=${q}`,
   sinerji: `https://www.sinerji.gen.tr/${slug}-s`,
   gaming: `https://www.gaming.gen.tr/?s=${q}&post_type=product&dgwt_wcas=1`,
+  pttavm: `https://www.pttavm.com/arama?q=${q}`,
+  pazarama: `https://www.pazarama.com/arama?q=${q}`,
+  tebilon: `https://www.tebilon.com/arama/?a=${q}`,
+  eksen: `https://www.eksenbilgisayar.com/arama?urunAra=${q}`,
+  pckolik: `https://pckolik.com.tr/arama?q=${q}`,
+  nova: `https://www.novabilgisayar.com/${slug}-arama-sonuclari`,
+  gelbura: `https://www.gelbura.com/ara?q=${q}`,
+  teknobiyotik: `https://www.teknobiyotik.com/catalogsearch/result/?q=${q}`,
+  vizyon: `https://www.vizyonbilgisayar.com/arama?k=${q}`,
 };
 
 const outDir = path.resolve('.probe');
