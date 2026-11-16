@@ -5,59 +5,124 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>PC Price TR</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%228%22 fill=%22%23e8590c%22/%3E%3Ctext x=%2216%22 y=%2223%22 font-size=%2220%22 font-family=%22sans-serif%22 font-weight=%22bold%22 text-anchor=%22middle%22 fill=%22white%22%3E%E2%82%BA%3C/text%3E%3C/svg%3E" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700;800&display=swap" />
     <link rel="stylesheet" href="/styles.css" />
+    <script>
+      try {
+        const t = JSON.parse(localStorage.getItem('pcprice.theme'));
+        if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+      } catch {}
+    </script>
   </head>
   <body>
+    <a class="skip" href="#results">Skip to results</a>
     <header class="top">
-      <div class="brand">
-        <span class="logo">₺</span>
-        <div>
-          <h1>PC Price TR</h1>
-          <p>Cheapest PC parts across Turkish stores</p>
+      <div class="top-inner">
+        <div class="brand">
+          <span class="logo">₺</span>
+          <div>
+            <h1>PC Price TR</h1>
+            <p>Parts prices across Turkish stores</p>
+          </div>
         </div>
+        <form id="search" class="search" autocomplete="off">
+          <div class="field">
+            <svg class="mag" viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M13 13l4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+            <input id="q" name="q" type="search" placeholder="Search a part, e.g. rtx 4060 -ti" aria-label="Search for a part" required />
+            <kbd class="key" aria-hidden="true">/</kbd>
+          </div>
+          <button type="submit" class="primary">Search</button>
+          <label class="fresh" title="Ignore the 10-minute cache"><input id="fresh" type="checkbox" /> fresh</label>
+        </form>
+        <button id="theme" class="ghost icon-btn" type="button" title="Switch theme" aria-label="Switch theme">Auto</button>
       </div>
-      <form id="search" class="search" autocomplete="off">
-        <input id="q" name="q" type="search" placeholder="e.g. rtx 4060 -ti   ·   ryzen 7 7800x3d   ·   32gb ddr5 6000" required />
-        <button type="submit">Search</button>
-        <label class="fresh" title="Ignore the 10-minute cache"><input id="fresh" type="checkbox" /> fresh</label>
-      </form>
-      <p class="hint">Every word must appear in the title. Prefix a word with <code>-</code> to exclude it (<code>-ti</code>, <code>-laptop</code>).</p>
+      <div class="sub-inner">
+        <div id="recent" class="recent" aria-label="Recent searches"></div>
+        <p class="hint">Every word must match the title. <code>-ti</code> excludes a word. <span class="keys"><kbd>/</kbd> search <kbd>j</kbd><kbd>k</kbd> move <kbd>Enter</kbd> open <kbd>a</kbd> add <kbd>h</kbd> history</span></p>
+      </div>
+      <div id="progress" class="progress" role="progressbar" aria-label="Stores answered" aria-valuemin="0" aria-valuemax="100"><i></i></div>
     </header>
 
     <main>
-      <section class="results">
-        <div id="stores" class="stores" aria-label="Stores"></div>
+      <section id="results" class="results" tabindex="-1" aria-label="Results">
+        <div id="stores" class="stores" role="group" aria-label="Stores to search. Press a store to include or skip it."></div>
+
+        <div id="stats" class="stats" hidden></div>
+
+        <section id="ladder" class="ladder" hidden aria-label="Price spread">
+          <div class="ladder-head"><h2>Price spread</h2><span id="ladderNote"></span></div>
+          <div id="track" class="track" role="img" aria-label="Price spread"></div>
+          <div id="axis" class="axis"></div>
+          <div id="tip" class="tip" hidden></div>
+        </section>
+
+        <section id="history" class="history" hidden aria-label="Price history">
+          <div class="ladder-head">
+            <h2 id="hTitle">Price history</h2>
+            <span id="hNote"></span>
+          </div>
+          <div class="hctl">
+            <label class="tgl"><input id="hMed" type="checkbox" /> Median</label>
+            <button id="hClose" class="ghost" type="button" hidden>Back to this search</button>
+          </div>
+          <div id="hchart" class="hchart"></div>
+          <div id="htip" class="tip htip" hidden></div>
+          <details class="htable"><summary>Table view</summary><div id="hdata"></div></details>
+        </section>
+
+        <div id="best" class="best"></div>
+
         <div class="toolbar">
-          <div id="summary" class="summary"></div>
+          <div class="filters">
+            <input id="refine" type="search" placeholder="Filter results (e.g. msi -oc)" aria-label="Filter results" />
+            <span class="range">
+              <input id="pmin" inputmode="numeric" placeholder="Min ₺" aria-label="Minimum price" />
+              <span aria-hidden="true">–</span>
+              <input id="pmax" inputmode="numeric" placeholder="Max ₺" aria-label="Maximum price" />
+            </span>
+          </div>
           <div class="toggles">
-            <label title="Only offers that say 'Peşin fiyatına taksit' (instalments at the cash price)"><input id="onlyCash" type="checkbox" /> Peşin fiyata taksit</label>
-            <label><input id="showAgg" type="checkbox" checked /> Akakçe/Epey listings</label>
-            <label><input id="showHidden" type="checkbox" /> show hidden</label>
+            <label class="tgl" title="Only offers that say 'Peşin fiyatına taksit' (instalments at the cash price)"><input id="onlyCash" type="checkbox" /> Peşin fiyata taksit</label>
+            <label class="tgl"><input id="showAgg" type="checkbox" checked /> Akakçe/Epey</label>
+            <label class="tgl"><input id="showHidden" type="checkbox" /> Show hidden</label>
           </div>
         </div>
-        <div id="best" class="best"></div>
+        <div id="summary" class="summary" aria-live="polite"></div>
+
         <div class="table-wrap">
           <table id="table">
             <thead>
-              <tr><th class="num">Price</th><th>Store</th><th>Product</th><th></th></tr>
+              <tr>
+                <th class="num"><button class="sort" data-sort="price" type="button">Price</button></th>
+                <th class="delta">vs best</th>
+                <th><button class="sort" data-sort="store" type="button">Store</button></th>
+                <th><button class="sort" data-sort="title" type="button">Product</button></th>
+                <th></th>
+              </tr>
             </thead>
             <tbody></tbody>
           </table>
-          <p id="empty" class="empty">Search for a part to compare prices.</p>
+          <div id="empty" class="empty"></div>
         </div>
-        <p id="unsupported" class="footnote"></p>
+        <details id="unsupported" class="footnote"></details>
       </section>
 
       <aside class="build">
         <div class="build-head">
           <h2>My build</h2>
-          <button id="recheck" class="ghost" type="button">Re-check prices</button>
+          <div class="build-actions">
+            <button id="copyBuild" class="ghost" type="button" title="Copy the list with links">Copy</button>
+            <button id="recheck" class="ghost" type="button">Re-check prices</button>
+          </div>
         </div>
         <ol id="buildList"></ol>
         <div class="total"><span>Total</span><strong id="buildTotal">₺0</strong></div>
         <p class="footnote">Saved in this browser. Add parts with <b>+</b> on any result.</p>
       </aside>
     </main>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
     <script type="module" src="/app.js"></script>
   </body>
 </html>

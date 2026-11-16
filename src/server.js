@@ -3,6 +3,8 @@
 //   GET /api/sites                      stores we search, and the ones we can't
 //   GET /api/search?q=..&sites=a,b&fresh=1
 //       Server-Sent Events: one `site` event per store as it finishes, then `done`.
+//   GET /api/history?q=..     lowest/median price per past search of that query
+//   GET /api/history?url=..   price points of one offer
 //
 // The server drives your real Chrome, so it only answers requests that are
 // really for this machine: a Host header naming something else (DNS rebinding)
@@ -14,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { SITES, UNSUPPORTED } from './sites.js';
 import { searchAll as defaultSearchAll } from './search.js';
 import { closeBrowser, getContext } from './browser.js';
+import { createHistory } from './history.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]', '::1']);
@@ -24,6 +27,7 @@ const STATIC = {
   '/app.js': ['public/app.js', 'text/javascript; charset=utf-8'],
   '/styles.css': ['public/styles.css', 'text/css; charset=utf-8'],
   '/lib/text.js': ['src/text.js', 'text/javascript; charset=utf-8'],
+  '/lib/chart.js': ['src/chart.js', 'text/javascript; charset=utf-8'],
 };
 
 function sendJson(res, status, body) {
@@ -48,7 +52,13 @@ export function isSameOrigin(origin, hostHeader) {
   }
 }
 
-export function createServer({ searchAll = defaultSearchAll, host = '127.0.0.1' } = {}) {
+/** 'all' for every store, else the chosen store ids sorted: the key of a history series. */
+function scopeOf(siteIds) {
+  const ids = [...new Set(siteIds ?? [])].filter((id) => SITES.some((s) => s.id === id));
+  return !ids.length || ids.length === SITES.length ? 'all' : ids.sort().join(',');
+}
+
+export function createServer({ searchAll = defaultSearchAll, host = '127.0.0.1', history = null } = {}) {
   const guardHost = LOOPBACK.has(host.toLowerCase());
 
   async function handleSearch(req, res, url) {
@@ -68,10 +78,27 @@ export function createServer({ searchAll = defaultSearchAll, host = '127.0.0.1' 
         onSite: (r) => send('site', r),
       });
       send('done', { query: q, offers: result.offers });
+      if (history) {
+        history.record(q, result.offers, { scope: scopeOf(siteIds) });
+        history.save().catch((e) => console.error('history:', e.message));
+      }
     } catch (e) {
       send('fail', { error: e.message });
     }
     res.end();
+  }
+
+  function handleHistory(res, url) {
+    if (!history) return sendJson(res, 404, { error: 'History is off' });
+    const q = (url.searchParams.get('q') || '').trim();
+    const offerUrl = url.searchParams.get('url');
+    if (offerUrl) {
+      const offer = history.offer(offerUrl);
+      return offer ? sendJson(res, 200, offer) : sendJson(res, 404, { error: 'No history for that offer' });
+    }
+    if (!q) return sendJson(res, 400, { error: 'Missing q or url' });
+    const siteIds = url.searchParams.get('sites')?.split(',').filter(Boolean);
+    sendJson(res, 200, { query: q, points: history.query(q, scopeOf(siteIds)) });
   }
 
   return http.createServer(async (req, res) => {
@@ -94,6 +121,7 @@ export function createServer({ searchAll = defaultSearchAll, host = '127.0.0.1' 
           unsupported: UNSUPPORTED,
         });
       }
+      if (url.pathname === '/api/history') return handleHistory(res, url);
       if (url.pathname === '/api/search') return await handleSearch(req, res, url);
       const file = STATIC[url.pathname];
       if (file) {
@@ -111,7 +139,7 @@ export function createServer({ searchAll = defaultSearchAll, host = '127.0.0.1' 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const PORT = Number(process.env.PORT || 4870);
   const HOST = process.env.HOST || '127.0.0.1';
-  const server = createServer({ host: HOST });
+  const server = createServer({ host: HOST, history: createHistory({ file: path.join(ROOT, '.cache', 'history.json') }) });
   server.listen(PORT, HOST, () => {
     console.log(`pc-price-tr running at http://${HOST}:${PORT}`);
     // Warm the browser so the first search doesn't pay Chrome's start-up.

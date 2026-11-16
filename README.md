@@ -42,6 +42,8 @@ A word you searched for is never treated as noise. `klavye` finds keyboards, for
 
 **My build** (web app). Use **+** on any result to add it to a parts list with a running total, saved in your browser. **Re-check prices** re-runs each part's search, updates the saved listing's price, and points out a cheaper store offer if one appeared.
 
+**Price history** (web app). Each search is remembered in `.cache/history.json` (not committed), and the chart under the price spread shows the lowest price of that search over time. Tick **Median** to add the median, or press **h** on a selected row (or its chart icon) for that one offer's price over time. The stores don't publish their old prices, so history starts the first time you search and grows with every search after that; a search has one point per half hour at most. A different set of ticked stores is a separate series, because switching a store off changes the lowest price. Offers not seen for 180 days are forgotten.
+
 Results are cached for 10 minutes per store and query. Tick **fresh** (or use **Re-check**) to bypass the cache.
 
 ## Stores
@@ -84,6 +86,7 @@ src/text.js      pure helpers: price parsing, normalisation, matching, flagging 
 src/sites.js     store registry + in-page extractors
 src/browser.js   shared persistent Chrome session, challenge handling, detail-page pricing
 src/search.js    fan-out, cache, offer normalisation
+src/history.js   price history store (.cache/history.json); src/chart.js has the chart maths shared with the UI
 src/server.js    local HTTP server + SSE search stream
 src/cli.js       terminal search
 src/unlock.js    open the profile visibly to pass checks by hand

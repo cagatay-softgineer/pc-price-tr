@@ -2,6 +2,9 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { createServer } from '../src/server.js';
+import { SITES } from '../src/sites.js';
+
+const [A, B] = [SITES[0].id, SITES[1].id].sort();
 
 let server;
 let port;
@@ -59,4 +62,45 @@ test('search streams one event per store and then done', async () => {
 test('a search without q is a 400 and unknown paths are 404', async () => {
   assert.equal((await get('/api/search')).status, 400);
   assert.equal((await get('/nope')).status, 404);
+});
+
+test('a finished search is recorded, and /api/history serves the series back', async () => {
+  const recorded = [];
+  const asked = [];
+  const history = {
+    record: (q, offers, opts) => recorded.push({ q, offers, opts }),
+    query: (q, scope) => (asked.push([q.toLowerCase(), scope]), q.toLowerCase() === 'rtx 4060' ? [{ t: 1, min: 1, median: 1, n: 1 }] : []),
+    offer: (url) => (url === 'https://x.test/p' ? { site: 'x', title: 'part', seen: 2, points: [[1, 1]] } : null),
+    save: async () => {},
+  };
+  const s = createServer({ searchAll: fakeSearch, history });
+  await new Promise((resolve) => s.listen(0, '127.0.0.1', resolve));
+  const p = s.address().port;
+  const call = (path) =>
+    new Promise((resolve, reject) => {
+      http.get({ host: '127.0.0.1', port: p, path, headers: { host: `127.0.0.1:${p}` } }, (res) => {
+        let body = '';
+        res.on('data', (c) => (body += c));
+        res.on('end', () => resolve({ status: res.statusCode, body }));
+      }).on('error', reject);
+    });
+  try {
+    await call('/api/search?q=rtx+4060');
+    assert.equal(recorded.length, 1);
+    assert.equal(recorded[0].q, 'rtx 4060');
+    assert.equal(recorded[0].opts.scope, 'all', 'no store filter means every store');
+    await call(`/api/search?q=rtx+4060&sites=${B},${A}`);
+    assert.equal(recorded[1].opts.scope, `${A},${B}`, 'a store selection is its own series, sorted so the order does not matter');
+    await call(`/api/history?q=rtx+4060&sites=${A},${B}`);
+    assert.deepEqual(asked.at(-1), ['rtx 4060', `${A},${B}`], 'history is read with the same scope');
+
+    const q = JSON.parse((await call('/api/history?q=RTX+4060')).body);
+    assert.equal(q.points.length, 1);
+    const o = JSON.parse((await call(`/api/history?url=${encodeURIComponent('https://x.test/p')}`)).body);
+    assert.deepEqual(o.points, [[1, 1]]);
+    assert.equal((await call('/api/history?url=https%3A%2F%2Fnone.test')).status, 404);
+    assert.equal((await call('/api/history')).status, 400);
+  } finally {
+    await new Promise((resolve) => s.close(resolve));
+  }
 });
